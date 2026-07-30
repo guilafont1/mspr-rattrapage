@@ -1,0 +1,38 @@
+{
+  "suite": "electio_silver_gold",
+  "framework": "great_expectations-compatible custom runner",
+  "generated_at": "2026-07-30T13:54:55.113117+00:00",
+  "success": true,
+  "results": [
+    {
+      "expectation": "expect_election_pct_between_0_100",
+      "success": true,
+      "detail": "rows=480"
+    },
+    {
+      "expectation": "expect_election_dept_in_metro",
+      "success": true,
+      "detail": "nunique=96"
+    },
+    {
+      "expectation": "expect_chomage_between_0_30",
+      "success": true,
+      "detail": "rows=16992"
+    },
+    {
+      "expectation": "expect_gold_unique_dept_annee",
+      "success": true,
+      "detail": "rows=480"
+    },
+    {
+      "expectation": "expect_gold_chomage_n1_complete",
+      "success": true,
+      "detail": "completude=100.0%"
+    },
+    {
+      "expectation": "expect_gold_pauvrete_n1_not_all_null",
+      "success": true,
+      "detail": "completude=40.0% (historique Filosofi attendu pour 2017/2022)"
+    }
+  ]
+}

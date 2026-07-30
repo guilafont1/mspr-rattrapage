@@ -1,0 +1,13 @@
+{
+  "suite_name": "electio_silver_gold",
+  "expectations": [
+    "expect_election_pct_between_0_100",
+    "expect_election_dept_in_metro",
+    "expect_chomage_between_0_30",
+    "expect_gold_unique_dept_annee",
+    "expect_gold_chomage_n1_complete",
+    "expect_gold_pauvrete_n1_not_all_null"
+  ],
+  "runner": "gx/run_checkpoint.py",
+  "note": "Suite compatible Great Expectations ; exécutable sans serveur GE via le runner pandas."
+}

@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+
+# Données volumineuses / dérivées (régénérables)
+data/raw/
+data/bronze/
+data/silver/
+data/gold/
+data/quality_report.txt
+data/ml_report.json
+viz/out/
+
+# Secrets
+.env
+*.pem
+credentials.json

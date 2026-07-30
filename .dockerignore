@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+data/raw/
+data/bronze/
+.pytest_cache/
+docs/*.jpg
+docs/*.pdf
+node_modules/
+.git/
