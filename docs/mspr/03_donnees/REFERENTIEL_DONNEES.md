@@ -37,7 +37,7 @@ Licence globale des jeux utilisés : **Licence Ouverte v2.0 (Etalab)** sauf ment
 | 15 | Gold | `taux_chomage_n1` renseigné |
 | 16 | Gold | Unicité clé `(code_dept, annee)` |
 
-Compléments : manifests JSON par couche, tests `pytest`, suite Great Expectations (`gx/`).
+Compléments : manifests JSON par couche, tests `pytest`, suite DQM exécutable (`dqm/`, pattern expectations — outil interne).
 
 ## Mapping candidat → bloc
 Voir `etl/mapping_blocs.py` (EXG / GAU / CEN / DRO / EXD) — choix pédagogique documenté, modifiable, rejouable.

@@ -26,7 +26,7 @@ docs/
 | C1 / C2 / C3 Architecture & Big Data | `mspr/02_architecture/` |
 | C5 Data visualisation | `mspr/03_donnees/TECHNIQUES_DATAVIZ.md` |
 | C6 Référentiel données | `mspr/03_donnees/REFERENTIEL_DONNEES.md` |
-| C4 / C8 ML & qualité | `mspr/04_machine_learning/` + `gx/` |
+| C4 / C8 ML & qualité | `mspr/04_machine_learning/` + `dqm/` |
 | C7 BI | `mspr/05_bi_restitution/` |
 | C9 RGPD | `mspr/06_rgpd_securite/` |
 | Oral / grille niveau 3 | `mspr/07_soutenance/` |

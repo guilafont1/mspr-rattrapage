@@ -27,35 +27,33 @@ catalogue INSEE, normalise vers le contrat BRONZE, et agrège les candidats en
 - `ml/train.py` — modèles comparés, CV groupée, matrice de confusion
 - `viz/figures.py` — figures exploratoires + restitution
 - `tests/test_pipeline.py` — tests qualité + anti-leakage + contrats de couches
+- `dqm/` — suite DQM exécutable (pattern expectations, outil interne)
 - `docs/` — index dans `docs/README.md` (sujet, archi, données, ML, BI, RGPD, soutenance, livrables)
 - `data/bronze|silver|gold/` — couches médailon (+ manifests JSON)
 - `data/gold/electio_poc.db` — livrable SQL (dims + faits + gold + kpi)
 
-## Modèle retenu
+## Modèle retenu (chiffres figés — 30/07/2026)
 Gradient Boosting — sélection par **walk-forward temporel** (leave-one-election-out).
-Holdout 2022 ≈ **0,53** (seuil CDC > 0,5), CV géo secondaire ≈ 0,70.
+Holdout 2022 = **0,53** (seuil CDC > 0,5), walk-forward ≈ 0,37, CV géo secondaire ≈ 0,72.
 Le Random Forest reste fort en CV géo mais échoue sur la recomposition 2022 : d’où le critère temporel.
-Variables clés : dynamique du chômage, lags politiques, emploi / population.
+Variables clés : lags politiques, dynamique du chômage, emploi / population.
+Détail : `docs/mspr/04_machine_learning/CHIFFRES_FIGES.md` et `data/ml_report.json`.
 
-## ⚠️ Avant remise finale
-Relancer `python run_pipeline.py --real` puis figer les chiffres du dossier / deck
-sur `data/ml_report.json` et `docs/mspr/04_machine_learning/CHIFFRES_FIGES.md`.
-
-Docs grille (rangés par thème) :
+## Documentation MSPR
 - `docs/mspr/03_donnees/` — référentiel + techniques dataviz
-- `docs/mspr/02_architecture/` — diagrammes flux / scale-out
-- `docs/mspr/04_machine_learning/` — analyse classes + chiffres
+- `docs/mspr/02_architecture/` — diagrammes flux / scale-out (PNG inclus)
+- `docs/mspr/04_machine_learning/` — analyse classes + chiffres figés
 - `docs/mspr/05_bi_restitution/` — Metabase + étoile
 - `docs/mspr/07_soutenance/ARGUMENTAIRE_NIVEAU3.md`
+- Livrables jury : `docs/livrables/` (docx + pptx) — régénérer via `docs/scripts/make_*.js`
 
-Datalake / BI jury :
+## Datalake / BI jury
 ```bash
 docker compose --profile datalake up -d minio
 python etl/03_sync_datalake.py
 docker compose --profile bi up -d metabase   # http://localhost:3000
+python dqm/run_checkpoint.py                 # suite DQM (make dqm)
 ```
-
-Soutenance : `docs/mspr/07_soutenance/ARGUMENTAIRE_NIVEAU3.md`.
 
 Sources : data.gouv.fr (élections), INSEE (chômage, emploi, population,
 Filosofi historique + Melodi, entreprises) — Licence Ouverte v2.0 (Etalab).

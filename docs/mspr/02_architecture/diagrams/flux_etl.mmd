@@ -1,0 +1,6 @@
+﻿flowchart LR
+  DG[data.gouv.fr] --> P[ThreadPoolExecutor]
+  IN[INSEE] --> P
+  P --> RAW[(raw)] --> BR[Bronze] --> DQ[Silver DQM] --> FE[Gold features] --> SQL[(SQLite)]
+  SQL --> ML[ML]
+  SQL --> BI[Metabase]

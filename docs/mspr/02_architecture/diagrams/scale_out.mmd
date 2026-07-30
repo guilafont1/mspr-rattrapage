@@ -1,0 +1,23 @@
+flowchart TB
+  subgraph ORCH["Orchestration Airflow"]
+    T1[task_download_elections]
+    T2[task_download_insee]
+    T3[task_normalize_bronze]
+    T4[task_silver_dqm]
+    T5[task_gold_features]
+    T6[task_train_ml]
+    T7[task_publish_bi]
+  end
+
+  T1 --> T3
+  T2 --> T3
+  T3 --> T4 --> T5
+  T5 --> T6
+  T5 --> T7
+
+  subgraph SPARK["Scale-out Spark"]
+    PART[Partitionnement<br/>code_dept × annee]
+    JOB[Jobs Silver/Gold<br/>Spark SQL / pandas UDFs]
+  end
+
+  T4 -. production .-> PART --> JOB

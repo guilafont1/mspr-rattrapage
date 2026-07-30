@@ -113,7 +113,7 @@
 **Preuves**  
 ```bash
 python -m pytest tests/ -v
-python gx/run_checkpoint.py
+python dqm/run_checkpoint.py
 type data\quality_report.txt
 ```
 

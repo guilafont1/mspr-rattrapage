@@ -1,7 +1,7 @@
 # Chiffres figés — livraison (données réelles `--real`)
 
 Source de vérité : `data/ml_report.json` + `data/quality_report.txt` + `data/gold/kpi_completude_features.csv`.
-Générés le : après `python run_pipeline.py --real` (session 20/20).
+**Générés le : 30/07/2026** (après `python run_pipeline.py --real`).
 
 ## Pipeline
 | Indicateur | Valeur |

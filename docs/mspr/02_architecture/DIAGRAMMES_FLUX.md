@@ -44,7 +44,7 @@ flowchart LR
 
 **Timing POC (ordi portable)** : ingestion I/O-bound parallèle sur 5 fichiers élections ; transform pandas local < 1 min ; ML walk-forward ~20–40 s.
 
-**Export gratuit (PNG/PDF)** : ouvrir [`diagrams/flux_etl.html`](diagrams/flux_etl.html) dans le navigateur → `Ctrl+P` → PDF, ou capture d’écran. Alternative : coller le `.mmd` sur [mermaid.live](https://mermaid.live) (gratuit, sans compte). Pas de mermaid-cli.
+**PNG livrés** : [`diagrams/flux_etl_medaillon.png`](diagrams/flux_etl_medaillon.png) (flux ETL) et [`diagrams/scale_out.png`](diagrams/scale_out.png) — insérés dans le dossier Word et le deck. Sources : `flux_etl.mmd` / `flux_etl.html`, `scale_out.mmd` / `scale_out.html`.
 
 ## C3 — Pipeline distribué (scale-out)
 

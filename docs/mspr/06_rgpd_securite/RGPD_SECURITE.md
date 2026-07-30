@@ -23,7 +23,7 @@
 ## Principes respectés
 1. **Minimisation** — uniquement indicateurs nécessaires au modèle.
 2. **Finalité** — POC de prévision électorale / aide à la décision.
-3. **Exactitude** — contrôles DQM + tests + SANITY anti-demo + checkpoint GX.
+3. **Exactitude** — contrôles DQM + tests + SANITY anti-demo + suite `dqm/run_checkpoint.py`.
 4. **Limitation de conservation** — jeux versionnés dans `data/` ; bruts archivés en RAW/MinIO.
 5. **Intégrité / confidentialité** — secrets hors dépôt (`.env`), pas de credentials en dur.
 
