@@ -1,7 +1,7 @@
 {
   "suite": "electio_silver_gold",
   "framework": "dqm_interne_pattern_expectations",
-  "generated_at": "2026-07-30T14:19:48.638696+00:00",
+  "generated_at": "2026-09-02T20:00:42.775287+00:00",
   "success": true,
   "results": [
     {
@@ -17,7 +17,7 @@
     {
       "expectation": "expect_chomage_between_0_30",
       "success": true,
-      "detail": "rows=16992"
+      "detail": "rows=9984"
     },
     {
       "expectation": "expect_gold_unique_dept_annee",
@@ -32,7 +32,7 @@
     {
       "expectation": "expect_gold_pauvrete_n1_not_all_null",
       "success": true,
-      "detail": "completude=40.0% (historique Filosofi attendu pour 2017/2022)"
+      "detail": "completude=80.0% (historique Filosofi attendu pour 2017/2022)"
     }
   ]
 }
