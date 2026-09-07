@@ -15,7 +15,7 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import requests
-from dash import Input, Output, State, dcc, html, no_update
+from dash import Input, Output, dcc, html, no_update
 
 # ---------------------------------------------------------------------------
 # Config / thème
@@ -66,6 +66,22 @@ def load_geojson():
         with open(GEOJSON_PATH, encoding="utf-8") as f:
             _GEO = json.load(f)
     return _GEO
+
+
+def dept_label_map():
+    names = {}
+    for feat in load_geojson().get("features", []):
+        props = feat.get("properties") or {}
+        code = str(props.get("code", "")).strip()
+        nom = props.get("nom")
+        if code:
+            names[code] = str(nom) if nom else code
+    return names
+
+
+def dept_dropdown_options(depts):
+    names = dept_label_map()
+    return [{"label": f"{d} — {names.get(d, d)}", "value": d} for d in (depts or [])]
 
 
 def api_get(path, **params):
@@ -138,7 +154,8 @@ def base_layout(fig, title="", height=420, subtitle=None, bottom_legend=True):
             f"{title}<br><span style='font-size:12px;color:{MUTED};"
             f"font-family:{FONT_UI};font-weight:500'>{subtitle}</span>"
         )
-    top = 78 if subtitle else 58
+    # Fraunces a des ascendantes hautes : ne pas coller le titre au bord du SVG.
+    top = 108 if subtitle else 86
     bottom = 88 if bottom_legend else 48
     fig.update_layout(
         title=dict(
@@ -146,9 +163,9 @@ def base_layout(fig, title="", height=420, subtitle=None, bottom_legend=True):
             font=dict(family=FONT_BRAND, size=18, color=INK),
             x=0,
             xanchor="left",
-            y=0.98,
+            y=0.94,
             yanchor="top",
-            pad=dict(t=2, b=12),
+            pad=dict(t=10, b=10),
         ),
         font=dict(family=FONT_UI, color=INK, size=13),
         paper_bgcolor="rgba(0,0,0,0)",
@@ -381,7 +398,7 @@ def render_tab(tab, annees, depts):
     if tab == "tab-model":
         return layout_model()
     if tab == "tab-predict":
-        return layout_predict()
+        return layout_predict(depts)
     return html.Div()
 
 
@@ -500,7 +517,7 @@ def _fig_scores_nationaux(scores: list) -> go.Figure:
         xaxis=dict(title="Année", tickmode="array", tickvals=years, title_standoff=8),
         yaxis=dict(title="%", showgrid=True, gridcolor="rgba(11,31,51,0.06)",
                    title_standoff=8, automargin=True),
-        margin=dict(l=56, r=24, t=72, b=56),
+        margin=dict(l=56, r=24, b=56),
         showlegend=False,
     )
     return fig
@@ -529,7 +546,7 @@ def _fig_stack_gagnants(rows: list) -> go.Figure:
         xaxis=dict(title="Année", type="category", title_standoff=8),
         yaxis=dict(title="Départements", showgrid=True, gridcolor="rgba(11,31,51,0.06)",
                    title_standoff=8, automargin=True),
-        margin=dict(l=56, r=24, t=72, b=56),
+        margin=dict(l=56, r=24, b=56),
         showlegend=False,
     )
     return fig
@@ -566,7 +583,7 @@ def _fig_socio_bloc(rows: list, value_col: str, title: str, y_title: str, unit: 
         xaxis=dict(title="Année", tickmode="array", tickvals=years, title_standoff=8),
         yaxis=dict(title=y_title, showgrid=True, gridcolor="rgba(11,31,51,0.06)",
                    title_standoff=10, automargin=True),
-        margin=dict(l=64, r=24, t=58, b=56),
+        margin=dict(l=64, r=24, b=56),
         showlegend=False,
     )
     return fig
@@ -601,7 +618,7 @@ def _fig_heatmap(rows: list) -> go.Figure:
     ))
     base_layout(fig, "Départements en tête", height=340, subtitle="Année × bloc", bottom_legend=False)
     fig.update_layout(
-        margin=dict(l=130, r=56, t=70, b=48),
+        margin=dict(l=130, r=56, b=48),
         showlegend=False,
     )
     return fig
@@ -669,7 +686,7 @@ def overview_figs(annee):
     fig_map.update_geos(fitbounds="locations", visible=False, bgcolor="rgba(0,0,0,0)", resolution=50)
     base_layout(fig_map, f"Scrutin {annee}", height=520, bottom_legend=False)
     fig_map.update_layout(
-        margin=dict(l=8, r=8, t=58, b=72),
+        margin=dict(l=8, r=8, b=72),
         legend=dict(
             orientation="h",
             yanchor="top",
@@ -708,7 +725,7 @@ def overview_figs(annee):
         xaxis=dict(title="Nombre de départements", range=[0, xmax], showgrid=True,
                    gridcolor="rgba(11,31,51,0.06)"),
         yaxis=dict(title="", automargin=True),
-        margin=dict(l=140, r=48, t=70, b=48),
+        margin=dict(l=140, r=48, b=48),
         showlegend=False,
     )
 
@@ -725,7 +742,7 @@ def overview_figs(annee):
     base_layout(fig_donut, "Part des territoires", height=300, subtitle=str(annee), bottom_legend=False)
     fig_donut.update_layout(
         showlegend=False,
-        margin=dict(l=24, r=24, t=70, b=40),
+        margin=dict(l=24, r=24, b=40),
         annotations=[dict(
             text=f"<b>{int(counts['n'].sum())}</b><br>depts",
             x=0.5, y=0.5, showarrow=False,
@@ -830,7 +847,7 @@ def indic_figs(dept_a, dept_b, metrics):
     fig.update_layout(
         xaxis=dict(title="", tickmode="array", tickvals=years, ticktext=[str(y) for y in years]),
         yaxis=dict(title="Valeur", gridcolor="rgba(11,31,51,0.07)"),
-        margin=dict(l=56, r=40, t=64, b=96),
+        margin=dict(l=56, r=40, b=96),
     )
     return fig, html.Div(tables, className="d-flex flex-wrap gap-4")
 
@@ -887,7 +904,7 @@ def model_figs(tab):
         sub = f"Accuracy test 2022 : {acc:.0%}" if acc is not None else ""
         base_layout(fig_cm, f"Confusion — test 2022  {sub}", height=420)
         fig_cm.update_layout(xaxis_title="Prédit", yaxis_title="Réel",
-                             margin=dict(l=64, r=40, t=72, b=56))
+                             margin=dict(l=64, r=40, b=56))
     else:
         fig_cm = empty_fig("Matrice indisponible")
 
@@ -902,7 +919,7 @@ def model_figs(tab):
         ))
         base_layout(fig_imp, f"Importance — {imp_data.get('modele_retenu', 'modèle')}", height=420)
         fig_imp.update_layout(xaxis_title="Importance", yaxis_title="",
-                              margin=dict(l=140, r=40, t=64, b=48))
+                              margin=dict(l=140, r=40, b=48))
     else:
         fig_imp = empty_fig("Importances indisponibles")
 
@@ -940,72 +957,340 @@ def model_figs(tab):
 
 
 # ========================= PREDICTION ======================================
-def layout_predict():
+PREDICT_FEATURES = [
+    "taux_chomage_n1", "delta_chomage_1a", "delta_chomage_5a",
+    "emploi_pour_1000hab", "croissance_emploi_5a_pct", "croissance_pop_5a_pct",
+    "taux_pauvrete_n1", "creations_entreprises_n1",
+    "pct_gagnant_precedent", "marge_gagnante_precedente",
+    "bloc_gagnant_precedent",
+]
+
+# Leviers what-if = features réellement utilisées par le modèle (hors lags politiques).
+WHATIF_METRICS = {
+    "taux_chomage_n1": {
+        "short": "Chômage",
+        "label": "Chômage N−1",
+        "question": "Et si le chômage était de…",
+        "unit": " %",
+        "step": 0.1,
+        "digits": 1,
+        "pad": 5.0,
+        "clamp": (3.0, 18.0),
+        "shock": 2.0,
+        "shock_txt": "pts",
+        "fallback": 8.0,
+        "link_deltas": True,
+    },
+    "delta_chomage_5a": {
+        "short": "Δ chômage 5 ans",
+        "label": "Variation du chômage sur 5 ans",
+        "question": "Et si le chômage avait varié de…",
+        "unit": " pts",
+        "step": 0.1,
+        "digits": 1,
+        "pad": 3.0,
+        "clamp": (-8.0, 8.0),
+        "shock": 1.0,
+        "shock_txt": "pts",
+        "fallback": 0.0,
+    },
+    "emploi_pour_1000hab": {
+        "short": "Emploi / 1 000 hab.",
+        "label": "Emploi pour 1 000 habitants",
+        "question": "Et si l'emploi pour 1 000 habitants était de…",
+        "unit": "",
+        "step": 5,
+        "digits": 0,
+        "pad": 120,
+        "clamp": (80, 1200),
+        "shock": 50,
+        "shock_txt": "",
+        "fallback": 350,
+    },
+    "croissance_emploi_5a_pct": {
+        "short": "Croissance emploi",
+        "label": "Croissance de l'emploi (5 ans)",
+        "question": "Et si la croissance de l'emploi sur 5 ans était de…",
+        "unit": " %",
+        "step": 0.2,
+        "digits": 1,
+        "pad": 6.0,
+        "clamp": (-12.0, 20.0),
+        "shock": 2.0,
+        "shock_txt": "pts",
+        "fallback": 1.0,
+    },
+    "croissance_pop_5a_pct": {
+        "short": "Croissance pop.",
+        "label": "Croissance de la population (5 ans)",
+        "question": "Et si la croissance de la population sur 5 ans était de…",
+        "unit": " %",
+        "step": 0.2,
+        "digits": 1,
+        "pad": 4.0,
+        "clamp": (-10.0, 12.0),
+        "shock": 1.5,
+        "shock_txt": "pts",
+        "fallback": 0.0,
+    },
+    "creations_entreprises_n1": {
+        "short": "Créations d'entreprises",
+        "label": "Créations d'entreprises / 10 000 hab.",
+        "question": "Et si les créations d'entreprises (pour 10 000 hab.) étaient de…",
+        "unit": "",
+        "step": 1,
+        "digits": 0,
+        "pad": 80,
+        "clamp": (0, 500),
+        "shock": 30,
+        "shock_txt": "",
+        "fallback": 25,
+    },
+}
+
+
+def _fmt_num(val, suffix="", digits=1):
+    if val is None or (isinstance(val, float) and pd.isna(val)):
+        return "—"
+    try:
+        txt = f"{float(val):.{digits}f}".replace(".", ",")
+    except (TypeError, ValueError):
+        return "—"
+    return f"{txt}{suffix}"
+
+
+def _round_step(val, step, digits):
+    if step >= 1:
+        return float(round(float(val) / step) * step)
+    return round(float(val), digits)
+
+
+def _metric_real(baseline, key):
+    spec = WHATIF_METRICS[key]
+    raw = (baseline or {}).get(key)
+    if raw is None or (isinstance(raw, float) and pd.isna(raw)):
+        return float(spec["fallback"])
+    return _round_step(raw, spec["step"], spec["digits"])
+
+
+def _slider_conf(key, baseline):
+    spec = WHATIF_METRICS[key]
+    real = _metric_real(baseline, key)
+    lo = max(spec["clamp"][0], real - spec["pad"])
+    hi = min(spec["clamp"][1], real + spec["pad"])
+    if hi <= lo:
+        hi = lo + spec["step"] * 10
+    lo = _round_step(lo, spec["step"], spec["digits"])
+    hi = _round_step(hi, spec["step"], spec["digits"])
+    if hi <= lo:
+        hi = lo + spec["step"]
+    mid = _round_step((lo + hi) / 2, spec["step"], spec["digits"])
+    marks = {
+        lo: _fmt_num(lo, spec["unit"], spec["digits"]),
+        mid: _fmt_num(mid, spec["unit"], spec["digits"]),
+        hi: _fmt_num(hi, spec["unit"], spec["digits"]),
+    }
+    return lo, hi, spec["step"], marks, real
+
+
+def _shock_labels(key):
+    shock = spec["shock"]
+    digits = 0 if abs(float(shock) - round(float(shock))) < 1e-9 else spec["digits"]
+    disp = _fmt_num(shock, f" {spec['shock_txt']}" if spec["shock_txt"] else "", digits).strip()
+    if key == "taux_chomage_n1":
+        return f"Moins de chômage (−{disp})", f"Plus de chômage (+{disp})"
+    return f"Baisse (−{disp})", f"Hausse (+{disp})"
+
+
+def layout_predict(depts):
+    depts = depts or []
+    opts = dept_dropdown_options(depts)
+    default = "75" if "75" in depts else (depts[0] if depts else None)
+    metric_opts = [{"label": spec["short"], "value": key} for key, spec in WHATIF_METRICS.items()]
     return html.Div([
         html.Div(className="ea-panel mb-3", children=[
-            html.H2("Prédiction what-if", className="ea-section-title"),
+            html.H2("Prédiction", className="ea-section-title"),
             html.P(
-                "Indicateurs N−1 et bloc précédent. Prédiction indicative — limites du modèle assumées.",
+                "Choisissez un département, puis l'indicateur à simuler. "
+                "Le modèle part de la situation réelle : un levier à la fois.",
                 className="ea-section-lead",
             ),
-            dbc.Row([
-                dbc.Col(_num_input("p-chom", "Chômage N−1 (%)", 8.5), md=4, lg=2),
-                dbc.Col(_num_input("p-delta", "Δ chômage 5 ans", -0.5), md=4, lg=2),
-                dbc.Col(_num_input("p-emploi", "Emploi / 1 000 hab.", 350), md=4, lg=2),
-                dbc.Col(_num_input("p-crois", "Croissance emploi (%)", 1.0), md=4, lg=2),
-                dbc.Col(_num_input("p-ent", "Créations / 10k", 25.0), md=4, lg=2),
-                dbc.Col([
-                    html.Label("Bloc précédent", className="ea-label"),
-                    dcc.Dropdown(
-                        id="p-prec",
-                        options=[{"label": f"{b} — {BLOCS_LABELS[b]}", "value": b} for b in BLOCS],
-                        value="CEN", clearable=False,
-                    ),
-                ], md=4, lg=2),
-            ], className="g-3 mb-3"),
-            html.Button("Lancer la prédiction", id="p-btn", n_clicks=0, className="ea-btn btn btn-dark"),
+            html.Div([
+                html.Label("Département", className="ea-label"),
+                dcc.Dropdown(
+                    id="p-dept",
+                    options=opts,
+                    value=default,
+                    clearable=False,
+                    placeholder="Choisir un département",
+                    style={"maxWidth": 420},
+                ),
+            ], className="mb-3"),
+            dcc.Store(id="p-baseline"),
+            html.Div(id="p-context"),
+            html.Div([
+                html.Label("Indicateur à simuler", className="ea-label"),
+                dcc.RadioItems(
+                    id="p-metric",
+                    options=metric_opts,
+                    value="taux_chomage_n1",
+                    inline=True,
+                    className="ea-metric-picks",
+                    inputClassName="ea-metric-pick-input",
+                    labelClassName="ea-metric-pick",
+                ),
+            ]),
+            html.Div(className="ea-whatif", children=[
+                html.Div(className="ea-whatif-head", children=[
+                    html.Label(id="p-whatif-label", children="Et si le chômage était de…",
+                               className="ea-label mb-0"),
+                    html.Span(id="p-readout", className="ea-whatif-value"),
+                ]),
+                dcc.Slider(
+                    id="p-slider",
+                    min=3,
+                    max=18,
+                    step=0.1,
+                    value=8.0,
+                    marks={3: "3 %", 8: "8 %", 13: "13 %", 18: "18 %"},
+                    tooltip={"placement": "bottom", "always_visible": False},
+                    className="ea-slider",
+                ),
+                html.Div(className="ea-scenarios", children=[
+                    html.Button("Situation réelle", id="p-sc-real", n_clicks=0,
+                                type="button", className="ea-chip"),
+                    html.Button("Moins de chômage (−2 pts)", id="p-sc-down", n_clicks=0,
+                                type="button", className="ea-chip"),
+                    html.Button("Plus de chômage (+2 pts)", id="p-sc-up", n_clicks=0,
+                                type="button", className="ea-chip"),
+                ]),
+            ]),
         ]),
         html.Div(id="p-winner"),
         dcc.Loading(dcc.Graph(id="p-graph", config={"displayModeBar": False}), type="dot"),
     ])
 
 
-def _num_input(id_, label, val):
-    return html.Div([
-        html.Label(label, className="ea-label"),
-        dbc.Input(id=id_, type="number", value=val, step="any"),
+def _predict_context(row):
+    annee = row.get("annee")
+    dept = str(row.get("code_dept", "")).strip()
+    lib = dept_label_map().get(dept) or row.get("libelle") or dept
+    prec = row.get("bloc_gagnant_precedent")
+    obs = row.get("bloc_gagnant")
+    return html.Div(className="ea-snap", children=[
+        html.Div([
+            html.Div("Référence", className="ea-metric-label"),
+            html.Div(f"{lib} · {annee}" if annee else lib, className="ea-snap-value"),
+        ], className="ea-snap-item"),
+        html.Div([
+            html.Div("Chômage réel", className="ea-metric-label"),
+            html.Div(_fmt_num(row.get("taux_chomage_n1"), " %"), className="ea-snap-value"),
+        ], className="ea-snap-item"),
+        html.Div([
+            html.Div("Emploi / 1 000 hab.", className="ea-metric-label"),
+            html.Div(_fmt_num(row.get("emploi_pour_1000hab"), digits=0), className="ea-snap-value"),
+        ], className="ea-snap-item"),
+        html.Div([
+            html.Div("Créations / 10k", className="ea-metric-label"),
+            html.Div(_fmt_num(row.get("creations_entreprises_n1"), digits=0), className="ea-snap-value"),
+        ], className="ea-snap-item"),
+        html.Div([
+            html.Div("Bloc précédent", className="ea-metric-label"),
+            html.Div(
+                f"{prec} — {BLOCS_LABELS.get(prec, prec)}" if prec else "—",
+                className="ea-snap-value",
+            ),
+        ], className="ea-snap-item"),
+        html.Div([
+            html.Div(f"Observé {annee}" if annee else "Observé", className="ea-metric-label"),
+            html.Div(
+                f"{obs} — {BLOCS_LABELS.get(obs, obs)}" if obs else "—",
+                className="ea-snap-value",
+            ),
+        ], className="ea-snap-item"),
     ])
+
+
+@app.callback(
+    Output("p-baseline", "data"),
+    Output("p-context", "children"),
+    Input("p-dept", "value"),
+)
+def load_predict_baseline(dept):
+    if not dept:
+        return None, html.P("Choisissez un département.", className="text-muted")
+    row = api_get("/predict/baseline", dept=dept)
+    if not row:
+        return None, dbc.Alert(
+            f"Pas de données GOLD pour le département {dept}.",
+            color="warning", className="py-2",
+        )
+    return row, _predict_context(row)
+
+
+@app.callback(
+    Output("p-slider", "min"),
+    Output("p-slider", "max"),
+    Output("p-slider", "step"),
+    Output("p-slider", "marks"),
+    Output("p-slider", "value"),
+    Output("p-whatif-label", "children"),
+    Output("p-sc-down", "children"),
+    Output("p-sc-up", "children"),
+    Input("p-baseline", "data"),
+    Input("p-metric", "value"),
+    Input("p-sc-real", "n_clicks"),
+    Input("p-sc-down", "n_clicks"),
+    Input("p-sc-up", "n_clicks"),
+)
+def set_predict_slider(baseline, metric, _real, _down, _up):
+    key = metric if metric in WHATIF_METRICS else "taux_chomage_n1"
+    spec = WHATIF_METRICS[key]
+    lo, hi, step, marks, real = _slider_conf(key, baseline)
+    down_lab, up_lab = _shock_labels(key)
+    tid = dash.callback_context.triggered_id
+    value = real
+    if tid == "p-sc-down":
+        value = _round_step(max(lo, real - spec["shock"]), step, spec["digits"])
+    elif tid == "p-sc-up":
+        value = _round_step(min(hi, real + spec["shock"]), step, spec["digits"])
+    return lo, hi, step, marks, value, spec["question"], down_lab, up_lab
 
 
 @app.callback(
     Output("p-graph", "figure"),
     Output("p-winner", "children"),
-    Input("p-btn", "n_clicks"),
-    State("p-chom", "value"),
-    State("p-delta", "value"),
-    State("p-emploi", "value"),
-    State("p-crois", "value"),
-    State("p-ent", "value"),
-    State("p-prec", "value"),
-    prevent_initial_call=False,
+    Output("p-readout", "children"),
+    Input("p-slider", "value"),
+    Input("p-baseline", "data"),
+    Input("p-metric", "value"),
 )
-def predict_fig(n, chom, delta, emploi, crois, ent, prec):
-    if not n:
-        return empty_fig("Saisissez des valeurs puis lancez la prédiction"), html.Div()
-    payload = {
-        "taux_chomage_n1": chom,
-        "delta_chomage_5a": delta,
-        "emploi_pour_1000hab": emploi,
-        "croissance_emploi_5a_pct": crois,
-        "creations_entreprises_n1": ent,
-        "bloc_gagnant_precedent": prec,
-    }
+def predict_fig(sim_val, baseline, metric):
+    key = metric if metric in WHATIF_METRICS else "taux_chomage_n1"
+    spec = WHATIF_METRICS[key]
+    tid = dash.callback_context.triggered_id
+    # Au changement de levier / département, ignorer l'ancienne valeur du curseur.
+    if tid in ("p-metric", "p-baseline") or sim_val is None:
+        sim_val = _metric_real(baseline, key)
+    readout = _fmt_num(sim_val, spec["unit"], spec["digits"])
+    if not baseline:
+        return empty_fig("Choisissez un département"), html.Div(), readout
+
+    payload = {k: baseline.get(k) for k in PREDICT_FEATURES}
+    payload[key] = float(sim_val)
+    real = baseline.get(key)
+    if spec.get("link_deltas") and real is not None:
+        shock = float(sim_val) - float(real)
+        for dkey in ("delta_chomage_1a", "delta_chomage_5a"):
+            if payload.get(dkey) is not None:
+                payload[dkey] = float(payload[dkey]) + shock
+
     code, body = api_post("/predict", payload)
     if code >= 400:
-        return empty_fig(f"Erreur API {code} : {body.get('detail', body)}"), html.Div()
+        return empty_fig(f"Erreur API {code} : {body.get('detail', body)}"), html.Div(), readout
     proba = body.get("probabilites") or {}
     if not proba:
-        return empty_fig("Pas de probabilités"), html.Div()
+        return empty_fig("Pas de probabilités"), html.Div(), readout
 
     if max(proba.values()) > 1.5:
         proba = {k: v / 100.0 for k, v in proba.items()}
@@ -1028,14 +1313,32 @@ def predict_fig(n, chom, delta, emploi, crois, ent, prec):
         textfont=dict(color=PAPER, size=13),
         hovertemplate="%{y} : %{x:.1%}<extra></extra>",
     ))
-    base_layout(fig, "Probabilités de bloc en tête", height=420)
+    base_layout(fig, "Probabilités de bloc en tête", height=380)
     fig.update_layout(
         xaxis=dict(range=[0, 1], tickvals=[0, 0.25, 0.5, 0.75, 1],
                    ticktext=["0 %", "25 %", "50 %", "75 %", "100 %"], title=""),
         yaxis_title="",
-        margin=dict(l=72, r=40, t=64, b=48),
+        margin=dict(l=72, r=40, b=48),
     )
     fig.add_vline(x=0.5, line_dash="dash", line_color="rgba(11,31,51,0.25)")
+
+    tol = max(spec["step"] * 0.6, 0.05)
+    same = real is not None and abs(float(sim_val) - float(real)) < tol
+    obs = baseline.get("bloc_gagnant")
+    annee = baseline.get("annee")
+    if same and obs:
+        note = (
+            f"Scénario = situation réelle {annee}. "
+            f"Observé : {obs} — {BLOCS_LABELS.get(obs, obs)}."
+        )
+    elif real is not None:
+        note = (
+            f"{spec['label']} simulé {_fmt_num(sim_val, spec['unit'], spec['digits'])} "
+            f"(réel {_fmt_num(real, spec['unit'], spec['digits'])}). "
+            f"Les autres indicateurs restent ceux de {annee}."
+        )
+    else:
+        note = "Prédiction indicative — limites du modèle assumées."
 
     winner_box = html.Div(className="pred-winner", children=[
         html.Div("Bloc prédit", className="ea-metric-label"),
@@ -1044,13 +1347,9 @@ def predict_fig(n, chom, delta, emploi, crois, ent, prec):
             className="ea-metric-value",
             style={"fontSize": "1.55rem"},
         ),
-        html.P(
-            "Prédiction indicative. Limites : scrutin 2022 atypique — "
-            "la référence reste l'accuracy en validation croisée groupée.",
-            className="ea-metric-sub mb-0 mt-2",
-        ),
+        html.P(note, className="ea-metric-sub mb-0 mt-2"),
     ])
-    return fig, winner_box
+    return fig, winner_box, readout
 
 
 if __name__ == "__main__":

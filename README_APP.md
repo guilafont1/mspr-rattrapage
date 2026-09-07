@@ -72,6 +72,7 @@ entraîne le modèle.
 | GET | `/indicateurs?dept=&annee=` | Données GOLD filtrées |
 | GET | `/resultats?annee=` | Résultats électoraux par bloc |
 | GET | `/model/info` | Métriques du modèle |
+| GET | `/predict/baseline?dept=` | Dernière situation GOLD d’un département |
 | POST | `/predict` | Prédiction à partir d'indicateurs |
 
 ## Régénérer les données (pipeline ETL)
@@ -97,7 +98,7 @@ puis relancer `docker compose up --build` (le backend rechargera la base).
 │   ├── ml_service.py       entraînement + prédiction (Gradient Boosting)
 │   └── Dockerfile
 ├── frontend/               tableau de bord Dash
-│   ├── app.py              3 onglets : vue d'ensemble, indicateurs, prédiction
+│   ├── app.py              4 onglets : vue d'ensemble, indicateurs, modèle, prédiction simplifiée
 │   └── Dockerfile
 ├── etl/  ml/  viz/  sql/   pipeline POC réutilisé
 └── data/                   couches bronze/silver/gold

@@ -266,6 +266,26 @@ class Features(BaseModel):
     bloc_gagnant_precedent: str | None = None
 
 
+@app.get("/predict/baseline")
+def predict_baseline(dept: str = Query(..., min_length=1, max_length=3)):
+    """Dernière observation GOLD d'un département (contexte what-if)."""
+    code = dept.strip().upper()
+    q = text("""
+        SELECT g.*, d.libelle
+        FROM gold_dataset_analytique g
+        LEFT JOIN dim_departement d ON d.code_dept = g.code_dept
+        WHERE g.code_dept = :dept
+        ORDER BY g.annee DESC
+        LIMIT 1
+    """)
+    df = pd.read_sql(q, engine, params={"dept": code})
+    if df.empty:
+        raise HTTPException(404, f"Aucun historique GOLD pour le département {code}")
+    rec = _records(df)[0]
+    rec["libelle"] = rec.get("libelle") or code
+    return rec
+
+
 @app.post("/predict")
 def predict(f: Features):
     if not ml_service.is_ready():
