@@ -28,6 +28,9 @@ services:
     env_file: .env
     # Pas de depends_on db : avec Aiven on lance seulement backend + frontend
     # docker compose up --build backend frontend
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
     ports:
       - "8000:8000"
 
