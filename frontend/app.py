@@ -333,8 +333,8 @@ app.layout = html.Div(
             class_name="ea-nav",
             children=[
                 dbc.Tab(label="Vue d'ensemble", tab_id="tab-overview"),
-                dbc.Tab(label="Indicateurs", tab_id="tab-indics"),
-                dbc.Tab(label="Analyse du modèle", tab_id="tab-model"),
+                dbc.Tab(label="Département", tab_id="tab-indics"),
+                dbc.Tab(label="Le modèle", tab_id="tab-model"),
                 dbc.Tab(label="Prédiction", tab_id="tab-predict"),
             ],
         ),
@@ -809,134 +809,164 @@ def overview_figs(annee):
 def layout_indics(depts):
     if not depts:
         depts = api_get("/departements") or []
-    opts = [{"label": d, "value": d} for d in depts]
+    opts = dept_dropdown_options(depts)
+    default = depts[0] if depts else None
     return html.Div([
         html.Div(className="ea-panel mb-3", children=[
-            html.H2("Indicateurs socio-économiques", className="ea-section-title"),
-            html.P("Trajectoires départementales — features antérieures au scrutin (N−1).",
-                   className="ea-section-lead"),
-            dbc.Row([
-                dbc.Col([
-                    html.Label("Département A", className="ea-label"),
-                    dcc.Dropdown(id="in-dept-a", options=opts, value=depts[0] if depts else None, clearable=False),
-                ], md=4),
-                dbc.Col([
-                    html.Label("Comparer avec", className="ea-label"),
-                    dcc.Dropdown(id="in-dept-b", options=opts, value=None, placeholder="Aucun"),
-                ], md=4),
-                dbc.Col([
-                    html.Label("Indicateurs", className="ea-label"),
-                    dcc.Dropdown(
-                        id="in-metrics",
-                        multi=True,
-                        options=[{"label": lab, "value": col} for col, lab in INDIC_COLS],
-                        value=["taux_chomage_n1", "emploi_pour_1000hab", "creations_entreprises_n1"],
-                    ),
-                ], md=4),
-            ], className="g-3"),
+            html.H2("Portrait d’un département", className="ea-section-title"),
+            html.P(
+                "Avant chaque élection : chômage, emploi, dynamisme. "
+                "Puis le bloc arrivé en tête — pour voir si le terrain socio-éco et le vote bougent ensemble.",
+                className="ea-section-lead",
+            ),
+            html.Label("Département", className="ea-label"),
+            dcc.Dropdown(
+                id="in-dept-a",
+                options=opts,
+                value=default,
+                clearable=False,
+                style={"maxWidth": 420},
+            ),
         ]),
-        dcc.Loading(dcc.Graph(id="in-graph", config={"displayModeBar": False}), type="dot"),
-        html.Div(id="in-table", className="ea-panel mt-3"),
+        html.Div(id="in-kpis", className="ea-metrics"),
+        html.Div(id="in-story", className="ea-panel mb-3"),
+        html.Div(className="ea-split", children=[
+            html.Div(className="ea-panel", children=[
+                html.H3("Chômage avant le scrutin", className="ea-section-title", style={"fontSize": "1.2rem"}),
+                html.P("Taux l’année précédente (N−1). Une seule courbe, lisible.", className="ea-section-lead"),
+                dcc.Loading(dcc.Graph(id="in-graph", config={"displayModeBar": False}), type="dot"),
+            ]),
+            html.Div(className="ea-panel", children=[
+                html.H3("Qui arrive en tête", className="ea-section-title", style={"fontSize": "1.2rem"}),
+                html.Div(id="in-table"),
+            ]),
+        ]),
     ])
+
+
+def _fmt_num(val, suffix=""):
+    if val is None or (isinstance(val, float) and pd.isna(val)):
+        return "—"
+    try:
+        return f"{float(val):.1f}{suffix}"
+    except (TypeError, ValueError):
+        return "—"
 
 
 @app.callback(
     Output("in-graph", "figure"),
     Output("in-table", "children"),
+    Output("in-kpis", "children"),
+    Output("in-story", "children"),
     Input("in-dept-a", "value"),
-    Input("in-dept-b", "value"),
-    Input("in-metrics", "value"),
 )
-def indic_figs(dept_a, dept_b, metrics):
-    if not dept_a or not metrics:
-        return empty_fig("Choisissez un département et des indicateurs"), html.Div()
+def indic_figs(dept_a):
+    empty = html.Div()
+    if not dept_a:
+        return empty_fig("Choisissez un département"), empty, [], empty
 
-    label_map = dict(INDIC_COLS)
+    data = api_get("/indicateurs", dept=dept_a)
+    if not data:
+        return empty_fig("Pas de données pour ce département"), empty, [], empty
+
+    df = pd.DataFrame(data).sort_values("annee")
+    last = df.iloc[-1]
+    year = int(last["annee"])
+    names = dept_label_map()
+    label = f"{dept_a} — {names.get(str(dept_a), dept_a)}"
+
+    kpis = [
+        kpi_metric("Chômage N−1", _fmt_num(last.get("taux_chomage_n1"), " %"), f"avant {year}"),
+        kpi_metric("Emploi", _fmt_num(last.get("emploi_pour_1000hab")), "pour 1 000 hab."),
+        kpi_metric("Pauvreté N−1", _fmt_num(last.get("taux_pauvrete_n1"), " %"), "si disponible"),
+        kpi_metric("Créations", _fmt_num(last.get("creations_entreprises_n1")), "pour 10k hab."),
+    ]
+
     fig = go.Figure()
-    tables = []
-
-    def add_dept(dept, dash_style="solid"):
-        data = api_get("/indicateurs", dept=dept)
-        if not data:
-            return
-        df = pd.DataFrame(data).sort_values("annee")
-        for col in metrics:
-            if col not in df.columns:
-                continue
-            fig.add_trace(go.Scatter(
-                x=df["annee"], y=df[col],
-                name=f"{label_map.get(col, col)} · {dept}",
-                mode="lines+markers",
-                line=dict(width=2.5, dash=dash_style),
-                marker=dict(size=8),
-                hovertemplate=f"<b>{dept}</b> · {label_map.get(col, col)}<br>%{{x}} : %{{y}}<extra></extra>",
-            ))
-        last = df.iloc[-1]
-        rows = []
-        for col, lab in INDIC_COLS:
-            if col not in df.columns:
-                continue
-            val = last.get(col)
-            rows.append(html.Tr([
-                html.Td(lab),
-                html.Td("—" if pd.isna(val) else f"{val:.2f}" if isinstance(val, float) else str(val)),
-            ]))
-        tables.append(html.Div([
-            html.H5(f"Dernières valeurs — dept {dept} ({int(last['annee'])})", className="h6 ea-brand"),
-            dbc.Table([html.Thead(html.Tr([html.Th("Indicateur"), html.Th("Valeur")])),
-                       html.Tbody(rows)], bordered=True, hover=True, size="sm", className="mb-0"),
-        ]))
-
-    add_dept(dept_a, "solid")
-    if dept_b and dept_b != dept_a:
-        add_dept(dept_b, "dot")
-
-    if not fig.data:
-        return empty_fig("Pas de données pour ce département"), html.Div("Aucune donnée.")
-
-    years = sorted({int(x) for tr in fig.data for x in tr.x})
-    base_layout(fig, "Évolution des indicateurs", height=480)
+    if "taux_chomage_n1" in df.columns:
+        fig.add_trace(go.Scatter(
+            x=df["annee"], y=pd.to_numeric(df["taux_chomage_n1"], errors="coerce"),
+            mode="lines+markers",
+            line=dict(width=3, color=SIGNAL),
+            marker=dict(size=9, color=INK),
+            hovertemplate="Avant %{x} : %{y:.1f} %<extra></extra>",
+            showlegend=False,
+        ))
+    years = [int(a) for a in df["annee"]]
+    base_layout(fig, f"Chômage à N−1 · {label}", height=360)
     fig.update_layout(
         xaxis=dict(title="", tickmode="array", tickvals=years, ticktext=[str(y) for y in years]),
-        yaxis=dict(title="Valeur", gridcolor="rgba(11,31,51,0.07)"),
-        margin=dict(l=56, r=40, b=96),
+        yaxis=dict(title="%", gridcolor="rgba(11,31,51,0.07)"),
+        margin=dict(l=56, r=24, b=48),
     )
-    return fig, html.Div(tables, className="d-flex flex-wrap gap-4")
+
+    chips = []
+    for _, row in df.iterrows():
+        bloc = row.get("bloc_gagnant")
+        chips.append(html.Div([
+            html.Div(str(int(row["annee"])), className="ea-metric-label"),
+            html.Div(
+                BLOCS_LABELS.get(bloc, bloc or "—"),
+                className="ea-snap-value",
+                style={"color": COLORS.get(bloc, INK)},
+            ),
+        ], className="ea-snap-item"))
+    portrait = html.Div(chips, className="d-flex flex-wrap gap-3")
+
+    story = "Pas assez d’historique pour une lecture."
+    if len(df) >= 2:
+        prev = df.iloc[-2]
+        ch0 = pd.to_numeric(pd.Series([prev.get("taux_chomage_n1")]), errors="coerce").iloc[0]
+        ch1 = pd.to_numeric(pd.Series([last.get("taux_chomage_n1")]), errors="coerce").iloc[0]
+        b0, b1 = prev.get("bloc_gagnant"), last.get("bloc_gagnant")
+        if pd.notna(ch0) and pd.notna(ch1):
+            delta = float(ch1) - float(ch0)
+            sens = "en hausse" if delta > 0.15 else ("en baisse" if delta < -0.15 else "stable")
+            vote = (
+                f"Le vote reste à {BLOCS_LABELS.get(b1, b1)}."
+                if b0 == b1
+                else f"Le vote bascule de {BLOCS_LABELS.get(b0, b0)} vers {BLOCS_LABELS.get(b1, b1)}."
+            )
+            story = (
+                f"Entre {int(prev['annee'])} et {year}, le chômage avant scrutin est {sens} "
+                f"({delta:+.1f} pt). {vote}"
+            )
+
+    story_block = html.Div([
+        html.H3("Lecture", className="ea-section-title", style={"fontSize": "1.15rem"}),
+        html.P(story, className="mb-0"),
+    ])
+    return fig, portrait, kpis, story_block
 
 
 # ========================= ANALYSE MODELE ==================================
 def layout_model():
     return html.Div([
         html.Div(className="ea-panel mb-3", children=[
-            html.H2("Analyse du modèle", className="ea-section-title"),
+            html.H2("Le modèle en 3 phrases", className="ea-section-title"),
             html.P(
-                "Le bloc annoncé est celui dont le score prédit est le plus élevé "
-                "(pas un vote, une lecture du maximum parmi EXG / GAU / CEN / DRO / EXD). "
-                "Ici le niveau national 2022 est connu (régime oracle). "
-                "Sélection = walk-forward hors holdout. Métrique principale : MAE.",
+                "Il ne « vote » pas. Il estime l’écart de chaque département au niveau national, "
+                "puis le bloc en tête est simplement celui au score le plus élevé. "
+                "On juge ça sur 2022, jamais vu à l’entraînement.",
                 className="ea-section-lead",
             ),
         ]),
+        html.Div(id="md-kpis", className="ea-metrics"),
         html.Div(className="ea-split mb-3", children=[
             html.Div(className="ea-panel", children=[
-                html.H3("Matrice de confusion — bloc en tête", className="ea-section-title", style={"fontSize": "1.2rem"}),
+                html.H3("Où il se trompe (2022)", className="ea-section-title", style={"fontSize": "1.2rem"}),
                 html.P(
-                    "Holdout 2022 : on compare le bloc réellement arrivé premier "
-                    "au bloc que le modèle place en tête (score le plus haut).",
+                    "Ligne = vrai vainqueur du département. Colonne = bloc que le modèle met en tête.",
                     className="ea-section-lead",
                 ),
                 dcc.Loading(dcc.Graph(id="md-confusion", config={"displayModeBar": False}), type="dot"),
             ]),
             html.Div(className="ea-panel", children=[
-                html.H3("MAE par bloc (oracle)", className="ea-section-title", style={"fontSize": "1.2rem"}),
-                html.P("Holdout vs persistance de l'écart — national connu", className="ea-section-lead"),
-                dcc.Loading(dcc.Graph(id="md-importance", config={"displayModeBar": False}), type="dot"),
+                html.H3("À retenir", className="ea-section-title", style={"fontSize": "1.2rem"}),
+                html.Div(id="md-comparison"),
             ]),
         ]),
-        html.Div(className="ea-panel", children=[
-            html.H3("Comparaison des modèles", className="ea-section-title", style={"fontSize": "1.2rem"}),
-            html.Div(id="md-comparison", className="mt-2"),
-        ]),
+        html.Div(id="md-importance", style={"display": "none"}),
     ])
 
 
@@ -944,11 +974,12 @@ def layout_model():
     Output("md-confusion", "figure"),
     Output("md-importance", "figure"),
     Output("md-comparison", "children"),
+    Output("md-kpis", "children"),
     Input("tabs", "active_tab"),
 )
 def model_figs(tab):
     if tab != "tab-model":
-        return no_update, no_update, no_update
+        return no_update, no_update, no_update, no_update
 
     conf = api_get("/model/confusion")
     if conf and conf.get("matrix"):
@@ -958,100 +989,76 @@ def model_figs(tab):
             z=z, x=labels, y=labels, colorscale="Blues",
             text=z, texttemplate="%{text}", hovertemplate="Réel %{y} · Prédit %{x} : %{z}<extra></extra>",
         ))
-        acc = conf.get("accuracy_test_2022")
-        sub = (
-            f"Bons blocs en tête en 2022 : {acc:.0%}"
-            if acc is not None else ""
+        base_layout(fig_cm, "Chaque case = nombre de départements", height=400)
+        fig_cm.update_layout(
+            xaxis_title="Bloc mis en tête par le modèle",
+            yaxis_title="Vrai vainqueur",
+            margin=dict(l=64, r=40, b=56),
         )
-        base_layout(fig_cm, f"Réel vs bloc au score le plus élevé  {sub}", height=420)
-        fig_cm.update_layout(xaxis_title="Prédit", yaxis_title="Réel",
-                             margin=dict(l=64, r=40, b=56))
     else:
-        fig_cm = empty_fig("Matrice indisponible")
-
-    reg = api_get("/model/regression") or {}
-    hold = (reg.get("holdout") or reg.get("regression_holdout") or {})
-    oracle = hold.get("oracle") or {}
-    modele = oracle.get("par_bloc_score") or hold.get("modele") or {}
-    base = (oracle.get("baseline_persistance_ecart") or {}).get("par_bloc_score") or {}
-    if modele:
-        fig_imp = go.Figure()
-        fig_imp.add_trace(go.Bar(
-            name="Modèle", x=BLOCS,
-            y=[(modele.get(b) or {}).get("mae") for b in BLOCS],
-            marker_color=INK,
-        ))
-        fig_imp.add_trace(go.Bar(
-            name="Persist. écart", x=BLOCS,
-            y=[(base.get(b) or {}).get("mae") for b in BLOCS],
-            marker_color=MUTED,
-        ))
-        note = reg.get("metrique_principale") or "MAE"
-        base_layout(
-            fig_imp,
-            f"{note} scores oracle — {reg.get('modele_retenu', '')}",
-            height=420,
-        )
-        fig_imp.update_layout(barmode="group", yaxis_title="MAE (pts)",
-                              legend=legend_below(2), margin=dict(l=56, r=40, b=72))
-    else:
-        imp_data = api_get("/model/importance") or {}
-        imp = imp_data.get("importances") or {}
-        if imp:
-            items = list(imp.items())[:12][::-1]
-            fig_imp = go.Figure(go.Bar(
-                x=[v for _, v in items], y=[k for k, _ in items], orientation="h",
-                marker_color=INK,
-            ))
-            base_layout(fig_imp, "Importance", height=420)
-        else:
-            fig_imp = empty_fig("MAE indisponible")
+        fig_cm = empty_fig("Matrice indisponible — le modèle n’est pas encore prêt.")
 
     comp = api_get("/model/comparison") or {}
-    rows = comp.get("modeles") or []
-    poids = (comp.get("poids_socio_eco") or {})
-    if not rows:
-        table = html.P("Rapport ml_report.json indisponible côté API.", className="text-muted")
-    else:
-        header = html.Thead(html.Tr([
-            html.Th("Modèle"), html.Th("MAE écart sel."), html.Th("Acc. oracle sel."),
-            html.Th("Acc. oracle"), html.Th("Acc. projeté"),
-            html.Th("MAE oracle"), html.Th(""),
-        ]))
-        body_rows = []
-        for r in rows:
-            badge = dbc.Badge("Retenu", color="danger") if r.get("retenu") else ""
-            def _f(key, digits=3):
-                v = r.get(key)
-                return f"{v:.{digits}f}" if v is not None else "—"
-            body_rows.append(html.Tr([
-                html.Td(r.get("modele", "")),
-                html.Td(_f("mae_ecart_walkforward_hors_holdout")),
-                html.Td(_f("accuracy_oracle_hors_holdout")),
-                html.Td(_f("accuracy_oracle_holdout")),
-                html.Td(_f("accuracy_projete_holdout")),
-                html.Td(_f("mae_score_oracle_holdout")),
-                html.Td(badge),
-            ]))
-        socio_note = ""
-        if poids.get("part_socio_eco") is not None:
-            socio_note = (
-                f" · part socio-éco dans l'importance : {poids['part_socio_eco']:.0%} "
-                f"(écart : {poids.get('part_electorale', 0):.0%})"
-            )
-        proto = (comp.get("protocole") or {}).get("avertissement") or ""
-        table = html.Div([
-            html.P(
-                f"Source : {comp.get('source')} · modèle retenu : {comp.get('modele_retenu')} · "
-                f"n = {comp.get('n_observations')} · métrique : {comp.get('metrique_principale', 'MAE')}"
-                f"{socio_note}",
-                className="small text-muted",
-            ),
-            html.P(proto, className="small text-muted") if proto else html.Div(),
-            dbc.Table([header, html.Tbody(body_rows)], bordered=True, hover=True, responsive=True, size="sm"),
-        ])
+    info = api_get("/model/info") or {}
+    acc = None
+    if conf and conf.get("accuracy_test_2022") is not None:
+        acc = conf.get("accuracy_test_2022")
+    elif info.get("accuracy_test_2022") is not None:
+        acc = info.get("accuracy_test_2022")
+    acc_txt = f"{acc:.0%}" if isinstance(acc, (int, float)) else "—"
+    modele = (info.get("modele_retenu") or "—").replace("_", " ")
+    n_obs = info.get("n_observations") or "—"
+    kpis = [
+        kpi_metric("Bons blocs en tête", acc_txt, "élection 2022, hors entraînement"),
+        kpi_metric("Observations", n_obs, "département × scrutin"),
+        kpi_metric("Méthode", modele.title() if isinstance(modele, str) else "—", "écarts au national"),
+    ]
 
-    return fig_cm, fig_imp, table
+    persist = None
+    hold_acc = acc
+    for r in (comp.get("modeles") or []):
+        if r.get("retenu") and r.get("accuracy_oracle_holdout") is not None:
+            hold_acc = r.get("accuracy_oracle_holdout")
+        if r.get("modele") == "baseline_persistance_ecart":
+            persist = r.get("accuracy_oracle_holdout")
+
+    recap = [
+        html.P(
+            [
+                html.Strong("Ce qu’il fait. "),
+                "Il prévoit comment un département s’écarte du score national, "
+                "puis annonce le bloc au plus haut score.",
+            ],
+            className="mb-3",
+        ),
+        html.P(
+            [
+                html.Strong("Ce qu’il ne fait pas. "),
+                "Il n’invente pas la vague nationale. "
+                "Sans ce niveau, il se trompe beaucoup plus souvent.",
+            ],
+            className="mb-3",
+        ),
+    ]
+    if isinstance(hold_acc, (int, float)):
+        vs = ""
+        if isinstance(persist, (int, float)):
+            vs = f" Recopier le scrutin précédent fait {persist:.0%}."
+        recap.append(html.P(
+            [
+                html.Strong("Verdict 2022. "),
+                f"Bon bloc en tête dans {hold_acc:.0%} des départements.{vs} "
+                "Utile pour le territoire, pas pour « qui gagne la France ».",
+            ],
+            className="mb-0",
+        ))
+    else:
+        recap.append(html.P(
+            "Les chiffres 2022 s’affichent dès que le modèle est entraîné.",
+            className="mb-0 text-muted",
+        ))
+
+    return fig_cm, empty_fig(""), recap, kpis
 
 
 # ========================= PREDICTION ======================================
