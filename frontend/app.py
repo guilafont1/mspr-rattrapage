@@ -106,7 +106,10 @@ def api_get(path, **params):
     try:
         q = {k: v for k, v in params.items() if v is not None}
         if _INPROC_GET is not None:
-            return _INPROC_GET(path, q)
+            out = _INPROC_GET(path, q)
+            if out is None:
+                print(f"[front api_get] None pour {path} {q}")
+            return out
         r = requests.get(f"{API}{path}", params=q, timeout=20)
         if r.status_code >= 400:
             return None
@@ -355,8 +358,10 @@ app.layout = html.Div(
 )
 def boot(_):
     health = api_get("/health")
+    print(f"[front boot] health={health}")
     annees = api_get("/annees") or []
     depts = api_get("/departements") or []
+    print(f"[front boot] n_annees={len(annees)} n_depts={len(depts)}")
     if health is None:
         banner = dbc.Alert(
             "API inaccessible — réessayez dans quelques secondes.",
@@ -1573,7 +1578,9 @@ def load_predict_baseline(dept, horizon, current):
         return current, _predict_context(current, horizon)
     if not dept:
         return None, html.P("Choisissez un périmètre (France ou département).", className="text-muted")
-    row = _fold_record(api_get("/predict/baseline", dept=dept))
+    raw = api_get("/predict/baseline", dept=dept)
+    print(f"[front predict] dept={dept} baseline={None if raw is None else list(raw)[:8]}")
+    row = _fold_record(raw)
     if not row:
         label = "France" if str(dept).upper() in ("FR", "FRANCE") else f"le département {dept}"
         return None, dbc.Alert(

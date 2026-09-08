@@ -150,12 +150,14 @@ def schema_outdated() -> bool:
         with eng.connect() as con:
             n = con.execute(text("SELECT COUNT(*) FROM gold_dataset_analytique")).scalar()
             if (n or 0) == 0:
+                print("[schema] GOLD 0 ligne")
                 return True
-            # Jeu charge avant enrichissement multi-sorties : nouvelles colonnes NULL
+            # Postgres plie les identifiants non quotés en minuscules
             n_new = con.execute(text(
                 "SELECT COUNT(*) FROM gold_dataset_analytique "
-                "WHERE ecart_EXG IS NOT NULL OR pct_EXG_national IS NOT NULL"
+                "WHERE ecart_exg IS NOT NULL OR pct_exg_national IS NOT NULL"
             )).scalar()
+            print(f"[schema] n={n} n_ecart_ou_national={n_new}")
             if (n_new or 0) == 0:
                 print("[schema] GOLD presente mais decomposition nationale/ecart vide -> reload")
                 return True
@@ -173,6 +175,48 @@ GOLD_CANON.update({
     "code_dept": "code_dept",
     "libelle": "libelle",
 })
+
+
+def gold_diagnostics(eng=None) -> dict:
+    """État GOLD pour les logs Render (colonnes, nulls, échantillon)."""
+    import traceback
+    eng = eng or get_engine()
+    info = {"ok": False}
+    try:
+        raw_cols = sorted(_existing_columns(eng, "gold_dataset_analytique"))
+        info["colonnes_pg"] = raw_cols
+        df = canonicalize_gold_df(
+            pd.read_sql("SELECT * FROM gold_dataset_analytique", eng)
+        )
+        info["n_lignes"] = int(len(df))
+        info["colonnes_canon"] = list(df.columns)
+        watch = (
+            ["bloc_gagnant", "annee", "code_dept"]
+            + [f"pct_{b}" for b in BLOCS]
+            + [f"ecart_{b}" for b in BLOCS]
+            + [f"ecart_{b}_prec" for b in BLOCS]
+            + [f"pct_{b}_national" for b in BLOCS]
+        )
+        nn = {}
+        for c in watch:
+            if c in df.columns:
+                nn[c] = int(pd.to_numeric(df[c], errors="coerce").notna().sum()) if c not in (
+                    "bloc_gagnant", "code_dept"
+                ) else int(df[c].notna().sum())
+            else:
+                nn[c] = "ABSENT"
+        info["non_null"] = nn
+        if "annee" in df.columns and len(df):
+            info["annees"] = sorted(pd.to_numeric(df["annee"], errors="coerce").dropna().astype(int).unique().tolist())
+        if len(df):
+            sample = df.iloc[0].to_dict()
+            info["sample0"] = {k: (None if pd.isna(v) else v) for k, v in list(sample.items())[:20]}
+        info["ok"] = True
+    except Exception as e:
+        info["error"] = str(e)
+        info["traceback"] = traceback.format_exc()
+    print("[debug:gold] " + str({k: v for k, v in info.items() if k != "sample0"}))
+    return info
 
 
 def canonicalize_gold_df(df: pd.DataFrame) -> pd.DataFrame:
@@ -236,12 +280,17 @@ def enrich_gold_ecarts(eng=None) -> int:
     gold = canonicalize_gold_df(
         pd.read_sql("SELECT * FROM gold_dataset_analytique", eng)
     )
+    print(f"[enrich] start n={0 if gold is None else len(gold)} cols={list(gold.columns) if gold is not None else []}")
     if gold is None or gold.empty:
         raise RuntimeError("GOLD vide — impossible d'enrichir les écarts")
 
     missing_pct = [f"pct_{b}" for b in BLOCS if f"pct_{b}" not in gold.columns]
     if missing_pct:
+        print(f"[enrich] colonnes brutes={list(gold.columns)}")
         raise RuntimeError(f"GOLD sans scores de blocs : {missing_pct}")
+    for b in BLOCS:
+        nn = int(pd.to_numeric(gold[f"pct_{b}"], errors="coerce").notna().sum())
+        print(f"[enrich] pct_{b} non-null={nn}/{len(gold)}")
 
     gold = gold.sort_values(["code_dept", "annee"]).reset_index(drop=True)
     has_inscrits = (
@@ -294,6 +343,8 @@ def enrich_gold_ecarts(eng=None) -> int:
     gold = pd.concat(parts, ignore_index=True)
 
     n_prec = int(pd.to_numeric(gold["ecart_EXG_prec"], errors="coerce").notna().sum())
+    n_ecart = int(pd.to_numeric(gold["ecart_EXG"], errors="coerce").notna().sum())
+    print(f"[enrich] apres calcul ecart_EXG={n_ecart} ecart_EXG_prec={n_prec} / {len(gold)}")
     if n_prec == 0:
         raise RuntimeError("Enrichissement écarts : toujours 0 ligne avec ecart_*_prec")
 
@@ -314,7 +365,10 @@ def enrich_gold_ecarts(eng=None) -> int:
 
 def refresh_if_needed() -> str:
     """Recharge depuis CSV si dispo, sinon enrichit la GOLD déjà en base."""
-    if not schema_outdated():
+    gold_diagnostics()
+    outdated = schema_outdated()
+    print(f"[refresh] schema_outdated={outdated} csv={silver_gold_available()}")
+    if not outdated:
         print("[startup] GOLD a jour, skip load")
         return "skip"
     if silver_gold_available():

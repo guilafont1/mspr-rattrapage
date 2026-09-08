@@ -1,4 +1,4 @@
-"""Génère le schéma d'architecture simplifié (slide PPT 16:9)."""
+"""Schéma d'architecture simplifié — slide PPT 16:9 (grille 4 colonnes)."""
 from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
@@ -9,15 +9,29 @@ NAVY = (27, 42, 94)
 BLUE = (0, 102, 204)
 RED = (227, 27, 35)
 GOLD = (201, 162, 39)
-GREY = (242, 243, 247)
 DARK = (34, 34, 34)
 WHITE = (255, 255, 255)
 MUTED = (90, 100, 130)
-BRONZE_C = (184, 115, 51)
-SILVER_C = (120, 125, 135)
+BRONZE_C = (176, 112, 48)
+SILVER_C = (108, 114, 124)
 TEAL = (0, 128, 128)
+FOOTER_BG = (242, 243, 247)
+
+BAND_1 = (232, 240, 252)
+BAND_2 = (244, 245, 249)
+BAND_3 = (252, 238, 238)
 
 W, H = 1920, 1080
+HEADER_H = 72
+FOOTER_H = 48
+MARGIN = 40
+BAND_GAP = 40
+BAND_H = 286
+LABEL_H = 44
+BOX_W = 408
+BOX_H = 156
+COL_GAP = 52  # gouttière = flèches horizontales
+COL_XS = (66, 526, 986, 1446)  # 4 colonnes identiques sur les 3 rangées
 
 
 def font(size: int, bold: bool = False) -> ImageFont.FreeTypeFont:
@@ -29,155 +43,113 @@ def round_rect(draw, xy, radius, fill, outline=None, width=2):
     draw.rounded_rectangle(xy, radius=radius, fill=fill, outline=outline, width=width)
 
 
-def arrow_right(draw, x1, y, x2, color=NAVY, thickness=7):
-    draw.line((x1, y, x2 - 20, y), fill=color, width=thickness)
-    draw.polygon([(x2, y), (x2 - 24, y - 13), (x2 - 24, y + 13)], fill=color)
+def node(draw, col, y, title, subtitle, accent):
+    x = COL_XS[col]
+    round_rect(draw, (x, y, x + BOX_W, y + BOX_H), 12, WHITE, outline=accent, width=2)
+    draw.rounded_rectangle((x, y, x + BOX_W, y + 14), radius=12, fill=accent)
+    draw.rectangle((x, y + 8, x + BOX_W, y + 14), fill=accent)
+    cx = x + BOX_W / 2
+    body_mid = y + 14 + (BOX_H - 14) / 2
+    draw.text((cx, body_mid - 16), title, font=font(22, True), fill=NAVY, anchor="mm")
+    draw.text((cx, body_mid + 18), subtitle, font=font(16), fill=MUTED, anchor="mm")
+    return (x, y, x + BOX_W, y + BOX_H)
 
 
-def arrow_down(draw, x, y1, y2, color=NAVY, thickness=5):
-    draw.line((x, y1, x, y2 - 14), fill=color, width=thickness)
-    draw.polygon([(x, y2), (x - 10, y2 - 16), (x + 10, y2 - 16)], fill=color)
+def arrow_right(draw, x1, x2, y):
+    head = 12
+    draw.line((x1, y, x2 - head, y), fill=NAVY, width=3)
+    draw.polygon([(x2, y), (x2 - head, y - 6), (x2 - head, y + 6)], fill=NAVY)
 
 
-def pills_row(draw, px, py, items):
-    for label, color in items:
-        f = font(16, True)
-        bbox = draw.textbbox((0, 0), label, font=f)
-        tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
-        bw, bh = tw + 28, th + 14
-        round_rect(draw, (px, py, px + bw, py + bh), 10, color)
-        draw.text((px + 14, py + 6), label, fill=WHITE, font=f)
-        px += bw + 10
+def arrow_down(draw, x, y1, y2):
+    head = 12
+    draw.line((x, y1, x, y2 - head), fill=NAVY, width=3)
+    draw.polygon([(x, y2), (x - 6, y2 - head), (x + 6, y2 - head)], fill=NAVY)
 
 
-def card(draw, x, y, w, h, title, accent, lines, pills):
-    round_rect(draw, (x, y, x + w, y + h), 16, WHITE, outline=accent, width=3)
-    draw.rounded_rectangle((x, y, x + w, y + 54), radius=16, fill=accent)
-    draw.rectangle((x, y + 28, x + w, y + 54), fill=accent)
-    draw.text((x + 20, y + 12), title, fill=WHITE, font=font(22, True))
-    ty = y + 74
-    for line in lines:
-        draw.text((x + 20, ty), line, fill=DARK, font=font(20))
-        ty += 34
-    if pills:
-        pills_row(draw, x + 18, y + h - 50, pills)
+def gutter_x(left_col):
+    """Milieu de la gouttière entre left_col et left_col+1."""
+    return COL_XS[left_col] + BOX_W + COL_GAP / 2
 
 
-def row_card(draw, x, y, w, h, title, subtitle, accent):
-    round_rect(draw, (x, y, x + w, y + h), 14, WHITE, outline=accent, width=3)
-    draw.rectangle((x, y + 8, x + 10, y + h - 8), fill=accent)
-    draw.text((x + 28, y + 14), title, fill=accent, font=font(22, True))
-    draw.text((x + 28, y + 48), subtitle, fill=DARK, font=font(18))
-
-
-def medal(draw, x, y, w, h, title, subtitle, color):
-    round_rect(draw, (x, y, x + w, y + h), 14, WHITE, outline=color, width=3)
-    draw.rounded_rectangle((x, y, x + w, y + 42), radius=14, fill=color)
-    draw.rectangle((x, y + 22, x + w, y + 42), fill=color)
-    draw.text((x + 16, y + 8), title, fill=WHITE, font=font(20, True))
-    draw.text((x + 16, y + 54), subtitle, fill=DARK, font=font(18))
+def band(draw, y, fill, number, title, accent):
+    x0, x1 = MARGIN, W - MARGIN
+    round_rect(draw, (x0, y, x1, y + BAND_H), 14, fill)
+    cx, cy = x0 + 28, y + LABEL_H / 2
+    draw.ellipse((cx - 13, cy - 13, cx + 13, cy + 13), fill=accent)
+    draw.text((cx, cy), str(number), font=font(15, True), fill=WHITE, anchor="mm")
+    draw.text((x0 + 50, cy), title, font=font(20, True), fill=NAVY, anchor="lm")
+    return y + LABEL_H + (BAND_H - LABEL_H - BOX_H) // 2
 
 
 def main():
     img = Image.new("RGB", (W, H), WHITE)
     draw = ImageDraw.Draw(img)
 
-    draw.rectangle((0, 0, W, 100), fill=NAVY)
-    draw.rectangle((0, 0, 16, 100), fill=RED)
-    draw.text((40, 22), "Electio-Analytics — Architecture simplifiée", fill=WHITE, font=font(36, True))
+    draw.rectangle((0, 0, W, HEADER_H), fill=NAVY)
+    draw.rectangle((0, 0, 10, HEADER_H), fill=RED)
+    draw.text((28, 36), "Electio-Analytics — Architecture", font=font(28, True), fill=WHITE, anchor="lm")
     draw.text(
-        (40, 64),
-        "3 couches  ·  Sources ouvertes  →  Médailon  →  API / Dash / ML / BI",
+        (1888, 36),
+        "Collecte  →  Médailon  →  Restitution",
+        font=font(16),
         fill=(180, 190, 220),
-        font=font(18),
+        anchor="rm",
     )
 
-    y = 140
-    col_h = 740
-    gap = 78
-    col_w = 536
-    x1, x2, x3 = 36, 36 + col_w + gap, 36 + 2 * (col_w + gap)
+    y1 = HEADER_H + 14
+    y2 = y1 + BAND_H + BAND_GAP
+    y3 = y2 + BAND_H + BAND_GAP
 
-    round_rect(draw, (x1, y, x1 + col_w, y + col_h), 22, GREY)
-    round_rect(draw, (x2, y, x2 + col_w, y + col_h), 22, GREY)
-    round_rect(draw, (x3, y, x3 + col_w, y + col_h), 22, GREY)
+    by1 = band(draw, y1, BAND_1, 1, "Collecte", BLUE)
+    by2 = band(draw, y2, BAND_2, 2, "Médailon", GOLD)
+    by3 = band(draw, y3, BAND_3, 3, "Restitution", RED)
 
-    pad = 22
-    inner = col_w - 2 * pad
+    # Rangée 1 — 3 sources (parallèles) puis ingestion
+    node(draw, 0, by1, "data.gouv.fr", "Élections T1  ·  5 scrutins", BLUE)
+    node(draw, 1, by1, "INSEE", "Chômage · emploi · population", BLUE)
+    node(draw, 2, by1, "Filosofi / SIDE", "Pauvreté  ·  Licence Ouverte v2", BLUE)
+    node(draw, 3, by1, "Ingestion", "Python  ·  MinIO  ·  data/raw", NAVY)
+    my1 = by1 + 14 + (BOX_H - 14) / 2
+    arrow_right(draw, COL_XS[2] + BOX_W + 10, COL_XS[3] - 10, my1)
 
-    # --- 1. Collecte ---
-    draw.text((x1 + pad, y + 18), "1. Collecte", fill=BLUE, font=font(26, True))
-    card(
-        draw,
-        x1 + pad,
-        y + 70,
-        inner,
-        280,
-        "Sources publiques",
-        BLUE,
-        ["data.gouv.fr  —  élections T1", "INSEE  —  chômage, emploi, pop", "Filosofi / SIDE  —  pauvreté"],
-        [("Licence Ouverte v2", BLUE)],
-    )
-    card(
-        draw,
-        x1 + pad,
-        y + 370,
-        inner,
-        340,
-        "Ingestion",
-        NAVY,
-        ["Téléchargements parallèles", "Archive immuable  data/raw", "Sync objet  MinIO (S3)"],
-        [("Python", NAVY), ("MinIO", MUTED), ("Docker", RED)],
-    )
+    # Rangée 2 — pipeline médailon
+    node(draw, 0, by2, "Bronze", "Contrats CSV normalisés", BRONZE_C)
+    node(draw, 1, by2, "Silver", "DQM · 16 contrôles · panel", SILVER_C)
+    node(draw, 2, by2, "Gold", "Grain : département × scrutin", GOLD)
+    node(draw, 3, by2, "Stockage", "SQLite / Postgres  ·  modèle étoile", NAVY)
+    my2 = by2 + 14 + (BOX_H - 14) / 2
+    arrow_right(draw, COL_XS[0] + BOX_W + 10, COL_XS[1] - 10, my2)
+    arrow_right(draw, COL_XS[1] + BOX_W + 10, COL_XS[2] - 10, my2)
+    arrow_right(draw, COL_XS[2] + BOX_W + 10, COL_XS[3] - 10, my2)
 
-    # --- 2. Médailon ---
-    draw.text((x2 + pad, y + 18), "2. Médailon", fill=NAVY, font=font(26, True))
-    mx = x2 + pad
-    medal(draw, mx, y + 70, inner, 120, "BRONZE", "Contrats CSV normalisés", BRONZE_C)
-    arrow_down(draw, x2 + col_w // 2, y + 198, y + 228)
-    medal(draw, mx, y + 232, inner, 120, "SILVER", "DQM · 16 contrôles · panel socio-éco", SILVER_C)
-    arrow_down(draw, x2 + col_w // 2, y + 360, y + 390)
-    medal(draw, mx, y + 394, inner, 120, "GOLD", "Grain : département × scrutin", GOLD)
-    card(
-        draw,
-        mx,
-        y + 534,
-        inner,
-        176,
-        "Stockage analytique",
-        NAVY,
-        ["SQLite  ·  Postgres (Aiven)", "Modèle étoile  (faits + dimensions)"],
-        [("SQL", NAVY), ("Metabase-ready", TEAL)],
-    )
+    # Rangée 3 — 4 sorties parallèles
+    node(draw, 0, by3, "FastAPI", "API métier  ·  dashboard & predict", NAVY)
+    node(draw, 1, by3, "Dash / Plotly", "Cartes · scénarios what-if", BLUE)
+    node(draw, 2, by3, "scikit-learn", "ML bloc gagnant  ·  holdout 2022", RED)
+    node(draw, 3, by3, "Metabase", "BI self-service  ·  KPI Gold", TEAL)
 
-    # --- 3. Restitution ---
-    draw.text((x3 + pad, y + 18), "3. Restitution", fill=RED, font=font(26, True))
-    rows = [
-        ("FastAPI", "API métier  ·  dashboard & predict", NAVY),
-        ("Dash / Plotly", "Cartes, what-if, séries temporelles", BLUE),
-        ("scikit-learn", "ML bloc gagnant  ·  walk-forward 2022", RED),
-        ("Metabase", "BI self-service  ·  KPI Gold", TEAL),
-    ]
-    rh, rs = 145, 14
-    for i, (title, subtitle, accent) in enumerate(rows):
-        row_card(draw, x3 + pad, y + 70 + i * (rh + rs), inner, rh, title, subtitle, accent)
+    # Connecteurs verticaux : gouttière centrale (entre col 1 et 2, x = 960)
+    spine = int(gutter_x(1))
+    arrow_down(draw, spine, y1 + BAND_H + 6, y2 - 6)
+    arrow_down(draw, spine, y2 + BAND_H + 6, y3 - 6)
 
-    mid_y = y + col_h // 2
-    arrow_right(draw, x1 + col_w + 10, mid_y, x2 - 10)
-    arrow_right(draw, x2 + col_w + 10, mid_y, x3 - 10)
-
-    draw.rectangle((0, 1020, W, H), fill=GREY)
-    draw.rectangle((0, 1020, W, 1024), fill=NAVY)
+    fy = H - FOOTER_H
+    draw.rectangle((0, fy, W, H), fill=FOOTER_BG)
+    draw.rectangle((0, fy, W, fy + 3), fill=NAVY)
     draw.text(
-        (40, 1038),
+        (28, fy + FOOTER_H / 2),
         "POC  ·  Python · Pandas · FastAPI · Dash · scikit-learn · SQLite / Postgres · MinIO · Metabase · Docker Compose",
+        font=font(15),
         fill=DARK,
-        font=font(18),
+        anchor="lm",
     )
-    draw.text((1620, 1038), "Electio-Analytics", fill=NAVY, font=font(18, True))
+    draw.text((1892, fy + FOOTER_H / 2), "Electio-Analytics", font=font(15, True), fill=NAVY, anchor="rm")
 
     img.save(OUT, "PNG", optimize=True)
-    print(f"OK -> {OUT} ({OUT.stat().st_size} octets)")
+    print(f"OK -> {OUT}")
+    print(f"bands y={y1},{y2},{y3}  box_y={by1},{by2},{by3}  spine={spine}")
+    print(f"cols={COL_XS}  right={COL_XS[-1] + BOX_W}")
 
 
 if __name__ == "__main__":

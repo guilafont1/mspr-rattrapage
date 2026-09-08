@@ -50,7 +50,11 @@ def startup():
             meta = ml_service.train_from_engine(engine)
             print(f"[startup] modele pret (apres enrich) : {meta}")
         except Exception as e2:
+            import traceback
             print(f"[startup] echec entrainement : {e2}")
+            print(traceback.format_exc())
+            print("[startup] diag GOLD:")
+            load_data.gold_diagnostics(engine)
 
 
 @app.post("/admin/reload")
@@ -80,6 +84,15 @@ if not SERVE_DASH:
 @app.get("/health")
 def health():
     return {"status": "ok", "modele_pret": ml_service.is_ready()}
+
+
+@app.get("/debug/gold")
+def debug_gold():
+    """Dump diagnostic GOLD — à lire dans les logs / le navigateur."""
+    info = load_data.gold_diagnostics(engine)
+    info["modele_pret"] = ml_service.is_ready()
+    info["ml_report"] = os.path.isfile(ml_service._ml_report_path())
+    return info
 
 
 @app.get("/health/db")
@@ -407,6 +420,7 @@ def predict_baseline(dept: str = Query("FR", min_length=1, max_length=10)):
     y compris pct_{B}_prec et dérivées électorales.
     """
     code = dept.strip().upper()
+    print(f"[predict/baseline] dept={code!r}")
     if code in ("FR", "FRANCE", "NAT", "NATIONAL"):
         q_year = text("SELECT MAX(annee) AS annee FROM gold_dataset_analytique")
         ydf = pd.read_sql(q_year, engine)
@@ -564,6 +578,7 @@ def model_regression():
 
 def _inproc_get(path: str, params: dict):
     """Appel direct des handlers FastAPI (pas de TestClient / httpx)."""
+    print(f"[inproc GET] {path} params={params}")
     try:
         if path == "/health":
             return health()
@@ -598,8 +613,17 @@ def _inproc_get(path: str, params: dict):
             return model_confusion()
         if path == "/model/regression":
             return model_regression()
-    except HTTPException:
+        if path == "/debug/gold":
+            return debug_gold()
+    except HTTPException as exc:
+        print(f"[inproc GET] HTTP {exc.status_code} {path} : {exc.detail}")
         return None
+    except Exception as exc:
+        import traceback
+        print(f"[inproc GET] EXC {path} : {exc}")
+        print(traceback.format_exc())
+        return None
+    print(f"[inproc GET] route inconnue {path}")
     return None
 
 

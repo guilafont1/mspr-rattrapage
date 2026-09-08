@@ -260,9 +260,17 @@ def valider_niveaux_nationaux(niveaux: dict) -> dict:
 def train_from_engine(engine):
     """Entraine le regresseur d'ecarts sur GOLD Postgres."""
     global _MODEL, _META, _IMPORTANCE, _CONFUSION, _ENVELOPE, _MEAN_SCORES, _NAT_HISTORY
+    print("[train] lecture GOLD...")
     df = load_data.canonicalize_gold_df(
         pd.read_sql("SELECT * FROM gold_dataset_analytique", engine)
     )
+    print(f"[train] n={len(df)} cols={list(df.columns)}")
+    for c in ("ecart_EXG", "ecart_EXG_prec", "pct_EXG", "pct_EXG_national"):
+        if c in df.columns:
+            nn = int(pd.to_numeric(df[c], errors="coerce").notna().sum())
+            print(f"[train] {c} non-null={nn}/{len(df)}")
+        else:
+            print(f"[train] {c} ABSENT")
     if "ecart_EXG" not in df.columns:
         raise RuntimeError(
             "GOLD sans ecarts — relancer etl/02_transform.py puis reload"
@@ -274,6 +282,7 @@ def train_from_engine(engine):
         .copy()
     )
     df_ml = df.dropna(subset=["ecart_EXG_prec"]).reset_index(drop=True)
+    print(f"[train] apres dropna ecart_EXG_prec n={len(df_ml)}")
     if len(df_ml) == 0:
         raise RuntimeError("GOLD vide apres filtrage ecart_*_prec")
 
@@ -361,7 +370,9 @@ def ensure_ready(engine) -> bool:
         print("[ml_service] modele pret (ensure_ready)")
         return True
     except Exception as e:
+        import traceback
         print(f"[ml_service] ensure_ready echec : {e}")
+        print(traceback.format_exc())
         try:
             import load_data
             load_data.enrich_gold_ecarts(engine)
@@ -370,6 +381,7 @@ def ensure_ready(engine) -> bool:
             return True
         except Exception as e2:
             print(f"[ml_service] ensure_ready enrich echec : {e2}")
+            print(traceback.format_exc())
             return False
 
 
