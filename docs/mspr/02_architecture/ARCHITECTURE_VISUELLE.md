@@ -1,7 +1,8 @@
 # Architecture 3 couches (compétence C2) — vue synthétique
 
-> **Slide PPT (16:9)** : [`diagrams/archi_techno_electio.png`](diagrams/archi_techno_electio.png)  
-> Régénérer : `py docs/mspr/02_architecture/diagrams/gen_archi_techno.py`
+> **Slide PPT (16:9), schéma simplifié** : [`diagrams/archi_simplifiee_electio.png`](diagrams/archi_simplifiee_electio.png)  
+> Régénérer : `py docs/mspr/02_architecture/diagrams/gen_archi_simplifie.py`  
+> **Vue détaillée (annexe)** : [`diagrams/archi_techno_electio.png`](diagrams/archi_techno_electio.png) — `py docs/mspr/02_architecture/diagrams/gen_archi_techno.py`
 
 ```mermaid
 flowchart TB

@@ -79,8 +79,6 @@ if not SERVE_DASH:
 
 @app.get("/health")
 def health():
-    if not ml_service.is_ready():
-        ml_service.ensure_ready(engine)
     return {"status": "ok", "modele_pret": ml_service.is_ready()}
 
 
@@ -564,12 +562,13 @@ def model_regression():
     return data
 
 
-# Même process que Dash sur Render : callbacks → http://127.0.0.1:$PORT
-# (évite le second uvicorn :8000 qui n'écoute pas / crash).
+# Même process : Dash monté sur / ; les callbacks appellent FastAPI in-process
+# (pas d'HTTP vers 127.0.0.1 — deadlock sur un seul worker uvicorn).
 if SERVE_DASH:
-    os.environ["API_URL"] = f"http://127.0.0.1:{os.getenv('PORT', '8000')}"
     if FRONT_DIR not in sys.path:
         sys.path.insert(0, FRONT_DIR)
+    import app as dash_module  # noqa: E402
     from app import server as dash_server  # noqa: E402
 
     app.mount("/", WSGIMiddleware(dash_server))
+    dash_module.bind_asgi_app(app)

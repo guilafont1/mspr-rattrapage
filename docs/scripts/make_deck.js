@@ -16,7 +16,9 @@ const FLUX_PNG = fs.existsSync(path.join(DIAG, 'flux_etl_medaillon.png'))
   ? path.join(DIAG, 'flux_etl_medaillon.png')
   : path.join(DIAG, 'flux_etl_mermaid_export.png');
 const SCALE_PNG = path.join(DIAG, 'scale_out.png');
-const ARCHI_PNG = path.join(DIAG, 'archi_techno_electio.png');
+const ARCHI_PNG = fs.existsSync(path.join(DIAG, 'archi_simplifiee_electio.png'))
+  ? path.join(DIAG, 'archi_simplifiee_electio.png')
+  : path.join(DIAG, 'archi_techno_electio.png');
 
 function base(slide, num, title, subtitle) {
   slide.background = { color: 'FFFFFF' };
@@ -100,7 +102,7 @@ if (fs.existsSync(ARCHI_PNG)) {
   s.addImage({ path: ARCHI_PNG, x: 0, y: 0, w: 13.333, h: 7.5, sizing: { type: 'cover', w: 13.333, h: 7.5 } });
 } else {
   base(s, 3, 'Architecture & stack technique', 'Schéma manquant');
-  card(s, 0.55, 1.8, 12.25, 4.8, 'PNG manquant', ['py docs/mspr/02_architecture/diagrams/gen_archi_techno.py'], RED);
+  card(s, 0.55, 1.8, 12.25, 4.8, 'PNG manquant', ['py docs/mspr/02_architecture/diagrams/gen_archi_simplifie.py'], RED);
 }
 
 // 6 Pipeline ETL — diagramme PNG
