@@ -84,6 +84,8 @@ if not SERVE_DASH:
 
 @app.get("/health")
 def health():
+    if not ml_service.is_ready():
+        ml_service.ensure_ready(engine)
     return {"status": "ok", "modele_pret": ml_service.is_ready()}
 
 
@@ -240,17 +242,20 @@ def dashboard_overview():
     }
 
 
+def _require_model():
+    if not ml_service.ensure_ready(engine):
+        raise HTTPException(503, "Modele non entraine")
+
+
 @app.get("/model/info")
 def model_info():
-    if not ml_service.is_ready():
-        raise HTTPException(503, "Modele non entraine")
+    _require_model()
     return ml_service.meta()
 
 
 @app.get("/model/importance")
 def model_importance():
-    if not ml_service.is_ready():
-        raise HTTPException(503, "Modele non entraine")
+    _require_model()
     return ml_service.importance()
 
 
@@ -262,8 +267,7 @@ def model_comparison():
 
 @app.get("/model/confusion")
 def model_confusion():
-    if not ml_service.is_ready():
-        raise HTTPException(503, "Modele non entraine")
+    _require_model()
     data = ml_service.confusion()
     if not data.get("matrix"):
         raise HTTPException(404, "Matrice de confusion indisponible")
@@ -505,8 +509,7 @@ class PredictRequest(Features):
 
 @app.post("/predict")
 def predict(f: PredictRequest):
-    if not ml_service.is_ready():
-        raise HTTPException(503, "Modele non entraine")
+    _require_model()
     horizon = int(f.horizon_ans or 1)
     if horizon not in (1, 2, 3):
         raise HTTPException(400, "horizon_ans doit être 1, 2 ou 3")

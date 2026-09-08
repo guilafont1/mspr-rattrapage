@@ -27,7 +27,21 @@ from sklearn.preprocessing import StandardScaler
 import load_data
 
 ROOT = os.path.join(os.path.dirname(__file__), "..")
-ML_REPORT = os.path.join(ROOT, "data", "ml_report.json")
+_HERE = os.path.dirname(__file__)
+ML_REPORT_CANDIDATES = [
+    os.path.join(ROOT, "data", "ml_report.json"),
+    os.path.join(_HERE, "ml_report.json"),
+]
+
+
+def _ml_report_path() -> str:
+    for path in ML_REPORT_CANDIDATES:
+        if os.path.isfile(path):
+            return path
+    return ML_REPORT_CANDIDATES[0]
+
+
+ML_REPORT = _ml_report_path()
 
 BLOCS = ["EXG", "GAU", "CEN", "DRO", "EXD"]
 TARGETS = [f"ecart_{b}" for b in BLOCS]
@@ -336,6 +350,19 @@ def train_from_engine(engine):
 
 def is_ready() -> bool:
     return _MODEL is not None
+
+
+def ensure_ready(engine) -> bool:
+    """Ré-essaie l'entraînement si le startup a échoué (BDD Aiven tardive)."""
+    if _MODEL is not None:
+        return True
+    try:
+        train_from_engine(engine)
+        print("[ml_service] modele pret (ensure_ready)")
+        return True
+    except Exception as e:
+        print(f"[ml_service] ensure_ready echec : {e}")
+        return False
 
 
 def meta() -> dict:
