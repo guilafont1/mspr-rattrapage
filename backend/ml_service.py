@@ -362,7 +362,15 @@ def ensure_ready(engine) -> bool:
         return True
     except Exception as e:
         print(f"[ml_service] ensure_ready echec : {e}")
-        return False
+        try:
+            import load_data
+            load_data.enrich_gold_ecarts(engine)
+            train_from_engine(engine)
+            print("[ml_service] modele pret (ensure_ready + enrich)")
+            return True
+        except Exception as e2:
+            print(f"[ml_service] ensure_ready enrich echec : {e2}")
+            return False
 
 
 def meta() -> dict:

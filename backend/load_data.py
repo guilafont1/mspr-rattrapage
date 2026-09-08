@@ -187,6 +187,145 @@ def canonicalize_gold_df(df: pd.DataFrame) -> pd.DataFrame:
     return df.rename(columns=rename) if rename else df
 
 
+def silver_gold_available() -> bool:
+    return os.path.isfile(os.path.join(SILVER, "elections.csv")) and os.path.isfile(
+        os.path.join(GOLD, "dataset_analytique.csv")
+    )
+
+
+def _lag_from_priors(values: list, years: list, ndigits: int = 2) -> tuple:
+    """Dérivées anti-leakage : uniquement les observations d'indice < i."""
+    n = len(values)
+    prec, d_rec, d_long, trend, vol = [], [], [], [], []
+    for i in range(n):
+        prior_s = values[:i]
+        prior_y = years[:i]
+        if not prior_s:
+            prec.append(None)
+            d_rec.append(None)
+            d_long.append(None)
+            trend.append(None)
+            vol.append(None)
+            continue
+        p_last = prior_s[-1]
+        prec.append(round(p_last, ndigits))
+        d_rec.append(
+            round(p_last - prior_s[-2], ndigits) if len(prior_s) >= 2 else None
+        )
+        p_first = prior_s[0]
+        y_first, y_last = prior_y[0], prior_y[-1]
+        dl = p_last - p_first
+        d_long.append(round(dl, ndigits))
+        span = y_last - y_first
+        trend.append(round(dl / span, 4) if span > 0 else None)
+        if len(prior_s) >= 2:
+            vol.append(round(float(pd.Series(prior_s).std(ddof=1)), 4))
+        else:
+            vol.append(None)
+    return prec, d_rec, d_long, trend, vol
+
+
+def enrich_gold_ecarts(eng=None) -> int:
+    """Recalcule national + écarts + lags à partir des pct_* déjà en base.
+
+    Sur Render les CSV silver/gold sont absents : on enrichit la GOLD Aiven
+    sans TRUNCATE des faits (la carte continue de marcher).
+    """
+    eng = eng or get_engine()
+    ensure_schema(eng)
+    gold = canonicalize_gold_df(
+        pd.read_sql("SELECT * FROM gold_dataset_analytique", eng)
+    )
+    if gold is None or gold.empty:
+        raise RuntimeError("GOLD vide — impossible d'enrichir les écarts")
+
+    missing_pct = [f"pct_{b}" for b in BLOCS if f"pct_{b}" not in gold.columns]
+    if missing_pct:
+        raise RuntimeError(f"GOLD sans scores de blocs : {missing_pct}")
+
+    gold = gold.sort_values(["code_dept", "annee"]).reset_index(drop=True)
+    has_inscrits = (
+        "inscrits" in gold.columns
+        and pd.to_numeric(gold["inscrits"], errors="coerce").fillna(0).sum() > 0
+    )
+
+    for an, idx in gold.groupby("annee").groups.items():
+        g = gold.loc[idx]
+        if has_inscrits:
+            w = pd.to_numeric(g["inscrits"], errors="coerce").fillna(0).astype(float)
+            sw = float(w.sum())
+        else:
+            w = pd.Series(1.0, index=g.index)
+            sw = float(len(g))
+        if sw <= 0:
+            continue
+        for b in BLOCS:
+            scores = pd.to_numeric(g[f"pct_{b}"], errors="coerce")
+            nat = float((scores * w).sum() / sw)
+            gold.loc[idx, f"pct_{b}_national"] = round(nat, 4)
+            gold.loc[idx, f"ecart_{b}"] = (scores - nat).round(4)
+
+    parts = []
+    for _, sub in gold.groupby("code_dept", sort=False):
+        sub = sub.sort_values("annee").copy()
+        years = sub["annee"].astype(int).tolist()
+        for b in BLOCS:
+            prec, d_rec, d_long, trend, vol = _lag_from_priors(
+                pd.to_numeric(sub[f"pct_{b}"], errors="coerce").astype(float).tolist(),
+                years,
+                ndigits=2,
+            )
+            sub[f"pct_{b}_prec"] = prec
+            sub[f"delta_recent_{b}"] = d_rec
+            sub[f"delta_long_{b}"] = d_long
+            sub[f"trend_{b}"] = trend
+            sub[f"volatility_{b}"] = vol
+            prec_e, d_rec_e, d_long_e, trend_e, vol_e = _lag_from_priors(
+                pd.to_numeric(sub[f"ecart_{b}"], errors="coerce").astype(float).tolist(),
+                years,
+                ndigits=4,
+            )
+            sub[f"ecart_{b}_prec"] = prec_e
+            sub[f"delta_recent_ecart_{b}"] = d_rec_e
+            sub[f"delta_long_ecart_{b}"] = d_long_e
+            sub[f"trend_ecart_{b}"] = trend_e
+            sub[f"volatility_ecart_{b}"] = vol_e
+        parts.append(sub)
+    gold = pd.concat(parts, ignore_index=True)
+
+    n_prec = int(pd.to_numeric(gold["ecart_EXG_prec"], errors="coerce").notna().sum())
+    if n_prec == 0:
+        raise RuntimeError("Enrichissement écarts : toujours 0 ligne avec ecart_*_prec")
+
+    pg_cols = _existing_columns(eng, "gold_dataset_analytique")
+    pg_by_lower = {c.lower(): c for c in pg_cols}
+    to_pg = {
+        c: pg_by_lower[c.lower()]
+        for c in gold.columns
+        if c.lower() in pg_by_lower
+    }
+    out = gold.rename(columns=to_pg)[list(to_pg.values())]
+    with eng.begin() as con:
+        con.execute(text("TRUNCATE TABLE gold_dataset_analytique"))
+        out.to_sql("gold_dataset_analytique", con, if_exists="append", index=False)
+    print(f"[schema] GOLD enrichie in-place ({n_prec} lignes avec ecart_*_prec)")
+    return n_prec
+
+
+def refresh_if_needed() -> str:
+    """Recharge depuis CSV si dispo, sinon enrichit la GOLD déjà en base."""
+    if not schema_outdated():
+        print("[startup] GOLD a jour, skip load")
+        return "skip"
+    if silver_gold_available():
+        print("[startup] GOLD absente/obsolete -> reload SILVER/GOLD...")
+        load()
+        return "csv"
+    print("[startup] CSV silver/gold absents -> enrichissement GOLD in-place")
+    enrich_gold_ecarts()
+    return "enrich"
+
+
 def _load_kpi(con, name: str, path: str):
     if not os.path.isfile(path):
         print(f"[WARN] KPI absent : {path}")

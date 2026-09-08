@@ -36,11 +36,7 @@ engine = get_engine()
 def startup():
     try:
         load_data.ensure_schema()
-        if load_data.is_empty() or load_data.schema_outdated():
-            print("[startup] GOLD absente/obsolete -> reload SILVER/GOLD...")
-            load_data.load()
-        else:
-            print("[startup] GOLD a jour, skip load")
+        load_data.refresh_if_needed()
     except Exception as e:
         print(f"[startup] avertissement chargement : {e}")
     try:
@@ -48,12 +44,11 @@ def startup():
         print(f"[startup] modele pret : {meta}")
     except Exception as e:
         print(f"[startup] avertissement entrainement : {e}")
-        # Derniere chance : forcer reload puis re-entrainer
         try:
-            print("[startup] tentative reload + retrain...")
-            load_data.load()
+            print("[startup] tentative enrichissement + retrain...")
+            load_data.enrich_gold_ecarts(engine)
             meta = ml_service.train_from_engine(engine)
-            print(f"[startup] modele pret (apres reload) : {meta}")
+            print(f"[startup] modele pret (apres enrich) : {meta}")
         except Exception as e2:
             print(f"[startup] echec entrainement : {e2}")
 
