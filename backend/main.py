@@ -64,6 +64,18 @@ def admin_reload():
         raise HTTPException(500, f"Reload KO : {e}") from e
 
 
+@app.get("/")
+def root():
+    """Page d'accueil — Render tape / par défaut (sinon 404)."""
+    return {
+        "service": "Electio-Analytics API",
+        "docs": "/docs",
+        "health": "/health",
+        "health_db": "/health/db",
+        "modele_pret": ml_service.is_ready(),
+    }
+
+
 @app.get("/health")
 def health():
     return {"status": "ok", "modele_pret": ml_service.is_ready()}
