@@ -211,6 +211,18 @@ def gold_diagnostics(eng=None) -> dict:
         if len(df):
             sample = df.iloc[0].to_dict()
             info["sample0"] = {k: (None if pd.isna(v) else v) for k, v in list(sample.items())[:20]}
+        try:
+            fait = pd.read_sql("SELECT * FROM fait_resultat_election", eng)
+            info["fait_n"] = int(len(fait))
+            info["fait_colonnes"] = list(fait.columns)
+            fnn = {}
+            for c in fait.columns:
+                cl = str(c).lower()
+                if cl.startswith("pct_") or cl in ("bloc_gagnant", "inscrits"):
+                    fnn[str(c)] = int(fait[c].notna().sum())
+            info["fait_non_null"] = fnn
+        except Exception as fe:
+            info["fait_error"] = str(fe)
         info["ok"] = True
     except Exception as e:
         info["error"] = str(e)
@@ -269,6 +281,66 @@ def _lag_from_priors(values: list, years: list, ndigits: int = 2) -> tuple:
     return prec, d_rec, d_long, trend, vol
 
 
+def _hydrate_pct_from_fait(gold: pd.DataFrame, eng) -> pd.DataFrame:
+    """Copie pct_* / inscrits depuis fait_resultat_election (GOLD Aiven incomplète)."""
+    try:
+        fait = pd.read_sql("SELECT * FROM fait_resultat_election", eng)
+    except Exception as e:
+        print(f"[enrich] fait_resultat_election illisible : {e}")
+        return gold
+    if fait is None or fait.empty:
+        print("[enrich] fait_resultat_election vide")
+        return gold
+
+    fait = fait.copy()
+    fait.columns = [str(c).lower() for c in fait.columns]
+    gold = gold.copy()
+    gold["_k_an"] = pd.to_numeric(gold["annee"], errors="coerce").astype("Int64")
+    gold["_k_dep"] = gold["code_dept"].astype(str).str.strip().str.zfill(2)
+    fait["_k_an"] = pd.to_numeric(fait["annee"], errors="coerce").astype("Int64")
+    fait["_k_dep"] = fait["code_dept"].astype(str).str.strip().str.zfill(2)
+
+    keep = ["_k_an", "_k_dep"]
+    ren = {}
+    for b in BLOCS:
+        src = f"pct_{b.lower()}"
+        if src in fait.columns:
+            keep.append(src)
+            ren[src] = f"_fait_pct_{b}"
+    if "inscrits" in fait.columns:
+        keep.append("inscrits")
+        ren["inscrits"] = "_fait_inscrits"
+    f2 = fait[keep].drop_duplicates(["_k_an", "_k_dep"]).rename(columns=ren)
+    print(f"[enrich] fait n={len(fait)} join_cols={list(f2.columns)}")
+    gold = gold.merge(f2, on=["_k_an", "_k_dep"], how="left")
+
+    for b in BLOCS:
+        src = f"_fait_pct_{b}"
+        dest = f"pct_{b}"
+        if src not in gold.columns:
+            continue
+        incoming = pd.to_numeric(gold[src], errors="coerce")
+        current = (
+            pd.to_numeric(gold[dest], errors="coerce")
+            if dest in gold.columns
+            else pd.Series(pd.NA, index=gold.index)
+        )
+        gold[dest] = current.where(current.notna(), incoming)
+        gold.drop(columns=[src], inplace=True)
+        print(f"[enrich] hydrate {dest} non-null={int(gold[dest].notna().sum())}/{len(gold)}")
+    if "_fait_inscrits" in gold.columns:
+        incoming = pd.to_numeric(gold["_fait_inscrits"], errors="coerce")
+        current = (
+            pd.to_numeric(gold["inscrits"], errors="coerce")
+            if "inscrits" in gold.columns
+            else pd.Series(pd.NA, index=gold.index)
+        )
+        gold["inscrits"] = current.where(current.notna(), incoming)
+        gold.drop(columns=["_fait_inscrits"], inplace=True)
+    gold.drop(columns=["_k_an", "_k_dep"], inplace=True)
+    return gold
+
+
 def enrich_gold_ecarts(eng=None) -> int:
     """Recalcule national + écarts + lags à partir des pct_* déjà en base.
 
@@ -283,6 +355,8 @@ def enrich_gold_ecarts(eng=None) -> int:
     print(f"[enrich] start n={0 if gold is None else len(gold)} cols={list(gold.columns) if gold is not None else []}")
     if gold is None or gold.empty:
         raise RuntimeError("GOLD vide — impossible d'enrichir les écarts")
+
+    gold = _hydrate_pct_from_fait(gold, eng)
 
     missing_pct = [f"pct_{b}" for b in BLOCS if f"pct_{b}" not in gold.columns]
     if missing_pct:
