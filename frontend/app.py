@@ -47,6 +47,14 @@ BLOCS_LABELS = {
     "DRO": "Droite",
     "EXD": "Extrême droite",
 }
+# Composition pédagogique T1 2022 (etl/mapping_blocs.py) — le modèle prédit le bloc, pas le candidat.
+PARTIS_BLOC = {
+    "EXG": "Arthaud, Poutou",
+    "GAU": "Mélenchon, Roussel, Hidalgo, Jadot",
+    "CEN": "Macron, Lassalle",
+    "DRO": "Pécresse, Dupont-Aignan",
+    "EXD": "Le Pen, Zemmour",
+}
 INDIC_COLS = [
     ("taux_chomage_n1", "Chômage N−1 (%)"),
     ("delta_chomage_1a", "Δ chômage 1 an"),
@@ -1748,42 +1756,63 @@ def predict_fig(baseline, horizon, metrics, scenario, slider_vals, slider_ids):
         showlegend=True,
     )
 
-    ordre_ecart = list(reversed(BLOCS))
-    vals_e = [float(ecarts.get(b, 0) or 0) for b in ordre_ecart]
-    fig_e = go.Figure(go.Bar(
-        x=vals_e,
-        y=[BLOCS_LABELS.get(b, b) for b in ordre_ecart],
-        orientation="h",
-        marker=dict(color=[COLORS.get(b, MUTED) for b in ordre_ecart]),
-        text=[f"{v:+.1f} pt" for v in vals_e],
+    pie_vals = [max(0.0, float(scores.get(b, 0) or 0)) for b in BLOCS]
+    pie_text = [
+        f"{BLOCS_LABELS[b]} {v:.1f} %" if v >= 1 else ""
+        for b, v in zip(BLOCS, pie_vals)
+    ]
+    fig_e = go.Figure(go.Pie(
+        labels=[f"{BLOCS_LABELS[b]} — {PARTIS_BLOC[b]}" for b in BLOCS],
+        values=pie_vals,
+        hole=0.52,
+        sort=False,
+        direction="clockwise",
+        marker=dict(
+            colors=[COLORS[b] for b in BLOCS],
+            line=dict(color="#fff", width=2),
+        ),
+        text=pie_text,
+        textinfo="text",
         textposition="outside",
-        cliponaxis=False,
-        textfont=dict(size=12, color=INK),
-        hovertemplate="%{y} : %{x:+.1f} pt par rapport à la France<extra></extra>",
-        showlegend=False,
+        textfont=dict(size=13, family=FONT_UI, color=INK),
+        hovertemplate=(
+            "<b>%{label}</b><br>"
+            "Score prédit : %{value:.1f} %<extra></extra>"
+        ),
+        showlegend=True,
     ))
-    lo_e = min(vals_e + [0])
-    hi_e = max(vals_e + [0])
-    pad_e = max(0.8, (hi_e - lo_e) * 0.4)
+    win_lib = BLOCS_LABELS.get(winner, winner)
     base_layout(
         fig_e,
-        "Plus ou moins que la France",
-        subtitle="À droite : le département vote plus que la moyenne · à gauche : moins",
-        height=340,
+        f"Part des voix prédites — {annee_h}",
+        subtitle=(
+            f"Bloc en tête : {win_lib}. "
+            "Légende = partis du T1 2022 ; le modèle ne prédit pas les candidats."
+        ),
+        height=480,
         bottom_legend=False,
     )
     fig_e.update_layout(
-        showlegend=False,
-        xaxis=dict(
-            title="",
-            range=[lo_e - pad_e, hi_e + pad_e],
-            zeroline=True,
-            zerolinecolor=INK,
-            zerolinewidth=1,
-            ticksuffix=" pt",
+        showlegend=True,
+        legend=dict(
+            orientation="h",
+            yanchor="top",
+            y=-0.08,
+            x=0.5,
+            xanchor="center",
+            font=dict(size=11, family=FONT_UI, color=INK),
+            bgcolor="rgba(255,255,255,0.65)",
+            borderwidth=0,
+            itemwidth=80,
         ),
-        yaxis=dict(title="", automargin=True),
-        margin=dict(l=140, r=72, b=40, t=100),
+        margin=dict(l=40, r=40, b=120, t=100),
+    )
+    fig_e.add_annotation(
+        text=f"<b>{win_lib}</b><br>{win_score:.0f} %",
+        x=0.5, y=0.5, xref="paper", yref="paper",
+        showarrow=False,
+        font=dict(family=FONT_BRAND, size=16, color=INK),
+        align="center",
     )
 
     fig_h = go.Figure()
