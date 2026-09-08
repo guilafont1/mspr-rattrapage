@@ -910,15 +910,21 @@ def layout_model():
         html.Div(className="ea-panel mb-3", children=[
             html.H2("Analyse du modèle", className="ea-section-title"),
             html.P(
-                "Confusion argmax du régime oracle (national 2022 connu). "
+                "Le bloc annoncé est celui dont le score prédit est le plus élevé "
+                "(pas un vote, une lecture du maximum parmi EXG / GAU / CEN / DRO / EXD). "
+                "Ici le niveau national 2022 est connu (régime oracle). "
                 "Sélection = walk-forward hors holdout. Métrique principale : MAE.",
                 className="ea-section-lead",
             ),
         ]),
         html.Div(className="ea-split mb-3", children=[
             html.Div(className="ea-panel", children=[
-                html.H3("Confusion (argmax)", className="ea-section-title", style={"fontSize": "1.2rem"}),
-                html.P("Holdout temporel — bloc déduit des scores prédits", className="ea-section-lead"),
+                html.H3("Matrice de confusion — bloc en tête", className="ea-section-title", style={"fontSize": "1.2rem"}),
+                html.P(
+                    "Holdout 2022 : on compare le bloc réellement arrivé premier "
+                    "au bloc que le modèle place en tête (score le plus haut).",
+                    className="ea-section-lead",
+                ),
                 dcc.Loading(dcc.Graph(id="md-confusion", config={"displayModeBar": False}), type="dot"),
             ]),
             html.Div(className="ea-panel", children=[
@@ -953,8 +959,11 @@ def model_figs(tab):
             text=z, texttemplate="%{text}", hovertemplate="Réel %{y} · Prédit %{x} : %{z}<extra></extra>",
         ))
         acc = conf.get("accuracy_test_2022")
-        sub = f"Accuracy argmax 2022 : {acc:.0%}" if acc is not None else ""
-        base_layout(fig_cm, f"Confusion argmax  {sub}", height=420)
+        sub = (
+            f"Bons blocs en tête en 2022 : {acc:.0%}"
+            if acc is not None else ""
+        )
+        base_layout(fig_cm, f"Réel vs bloc au score le plus élevé  {sub}", height=420)
         fig_cm.update_layout(xaxis_title="Prédit", yaxis_title="Réel",
                              margin=dict(l=64, r=40, b=56))
     else:
