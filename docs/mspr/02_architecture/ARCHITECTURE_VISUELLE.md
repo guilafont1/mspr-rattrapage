@@ -1,5 +1,8 @@
 # Architecture 3 couches (compétence C2) — vue synthétique
 
+> **Slide PPT (16:9)** : [`diagrams/archi_techno_electio.png`](diagrams/archi_techno_electio.png)  
+> Régénérer : `py docs/mspr/02_architecture/diagrams/gen_archi_techno.py`
+
 ```mermaid
 flowchart TB
   subgraph L1["Couche 1 — Collecte"]

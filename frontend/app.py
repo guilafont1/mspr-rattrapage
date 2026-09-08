@@ -15,7 +15,7 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import requests
-from dash import Input, Output, dcc, html, no_update
+from dash import ALL, Input, Output, State, dcc, html, no_update
 
 # ---------------------------------------------------------------------------
 # Config / thème
@@ -966,6 +966,9 @@ PREDICT_FEATURES = [
 ]
 
 # Leviers what-if = features réellement utilisées par le modèle (hors lags politiques).
+# Bornes = enveloppe d'entraînement observée dans data/gold/dataset_analytique.csv
+# (lignes avec bloc_gagnant_precedent non nul). À recalculer après chaque
+# run_pipeline.py — un arbre / RF n'extrapole pas hors de cette enveloppe.
 WHATIF_METRICS = {
     "taux_chomage_n1": {
         "short": "Chômage",
@@ -974,9 +977,9 @@ WHATIF_METRICS = {
         "unit": " %",
         "step": 0.1,
         "digits": 1,
-        "pad": 5.0,
-        "clamp": (3.0, 18.0),
-        "shock": 2.0,
+        "pad": 3.6,  # ≈ 2 σ
+        "clamp": (3.79, 12.01),
+        "shock": 1.8,
         "shock_txt": "pts",
         "fallback": 8.0,
         "link_deltas": True,
@@ -986,11 +989,11 @@ WHATIF_METRICS = {
         "label": "Variation du chômage sur 5 ans",
         "question": "Et si le chômage avait varié de…",
         "unit": " pts",
-        "step": 0.1,
-        "digits": 1,
-        "pad": 3.0,
-        "clamp": (-8.0, 8.0),
-        "shock": 1.0,
+        "step": 0.05,
+        "digits": 2,
+        "pad": 0.9,  # ≈ 2 σ
+        "clamp": (-0.92, 0.72),
+        "shock": 0.45,
         "shock_txt": "pts",
         "fallback": 0.0,
     },
@@ -1001,9 +1004,9 @@ WHATIF_METRICS = {
         "unit": "",
         "step": 5,
         "digits": 0,
-        "pad": 120,
-        "clamp": (80, 1200),
-        "shock": 50,
+        "pad": 82,  # ≈ 2 σ
+        "clamp": (301, 467),
+        "shock": 40,
         "shock_txt": "",
         "fallback": 350,
     },
@@ -1014,9 +1017,9 @@ WHATIF_METRICS = {
         "unit": " %",
         "step": 0.2,
         "digits": 1,
-        "pad": 6.0,
-        "clamp": (-12.0, 20.0),
-        "shock": 2.0,
+        "pad": 2.0,  # ≈ 2 σ
+        "clamp": (-1.2, 7.8),
+        "shock": 1.0,
         "shock_txt": "pts",
         "fallback": 1.0,
     },
@@ -1027,9 +1030,9 @@ WHATIF_METRICS = {
         "unit": " %",
         "step": 0.2,
         "digits": 1,
-        "pad": 4.0,
-        "clamp": (-10.0, 12.0),
-        "shock": 1.5,
+        "pad": 1.4,  # ≈ 2 σ
+        "clamp": (-1.8, 7.9),
+        "shock": 0.7,
         "shock_txt": "pts",
         "fallback": 0.0,
     },
@@ -1040,11 +1043,53 @@ WHATIF_METRICS = {
         "unit": "",
         "step": 1,
         "digits": 0,
-        "pad": 80,
-        "clamp": (0, 500),
-        "shock": 30,
+        "pad": 52,  # ≈ 2 σ
+        "clamp": (62, 166),
+        "shock": 26,
         "shock_txt": "",
-        "fallback": 25,
+        "fallback": 100,
+    },
+}
+
+# Scénarios narratifs (France) — chocs ≈ 1 σ par levier (dans l'enveloppe)
+SCENARIOS = {
+    "crise": {
+        "label": "Crise économique",
+        "blurb": "Chômage en nette hausse, emploi et créations d’entreprises en repli.",
+        "horizon": 2,
+        "deltas": {
+            "taux_chomage_n1": 1.8,
+            "delta_chomage_5a": 0.45,
+            "emploi_pour_1000hab": -40,
+            "croissance_emploi_5a_pct": -1.0,
+            "creations_entreprises_n1": -26,
+        },
+    },
+    "reprise": {
+        "label": "Reprise / croissance",
+        "blurb": "Baisse du chômage, dynamisme de l’emploi et des créations.",
+        "horizon": 2,
+        "deltas": {
+            "taux_chomage_n1": -1.4,
+            "delta_chomage_5a": -0.45,
+            "emploi_pour_1000hab": 35,
+            "croissance_emploi_5a_pct": 1.0,
+            "creations_entreprises_n1": 26,
+            "croissance_pop_5a_pct": 0.7,
+        },
+    },
+    "tension": {
+        "label": "Tension sociale",
+        "blurb": "Stagnation durable : chômage qui s’installe, tissu productif fragilisé.",
+        "horizon": 3,
+        "deltas": {
+            "taux_chomage_n1": 0.9,
+            "delta_chomage_5a": 0.3,
+            "emploi_pour_1000hab": -20,
+            "croissance_emploi_5a_pct": -0.6,
+            "croissance_pop_5a_pct": -0.5,
+            "creations_entreprises_n1": -14,
+        },
     },
 }
 
@@ -1094,6 +1139,7 @@ def _slider_conf(key, baseline):
 
 
 def _shock_labels(key):
+    spec = WHATIF_METRICS[key]
     shock = spec["shock"]
     digits = 0 if abs(float(shock) - round(float(shock))) < 1e-9 else spec["digits"]
     disp = _fmt_num(shock, f" {spec['shock_txt']}" if spec["shock_txt"] else "", digits).strip()
@@ -1102,88 +1148,218 @@ def _shock_labels(key):
     return f"Baisse (−{disp})", f"Hausse (+{disp})"
 
 
+def _apply_deltas(baseline, deltas):
+    """Applique des chocs relatifs à la baseline, bornés par le clamp de chaque métrique."""
+    out = {}
+    for key, delta in (deltas or {}).items():
+        if key not in WHATIF_METRICS:
+            continue
+        spec = WHATIF_METRICS[key]
+        real = _metric_real(baseline, key)
+        val = _round_step(real + float(delta), spec["step"], spec["digits"])
+        lo, hi = spec["clamp"]
+        out[key] = float(min(hi, max(lo, val)))
+    return out
+
+
+def _build_payload(baseline, overrides):
+    payload = {k: baseline.get(k) for k in PREDICT_FEATURES}
+    for key, sim_val in (overrides or {}).items():
+        if key not in WHATIF_METRICS:
+            continue
+        spec = WHATIF_METRICS[key]
+        real = baseline.get(key)
+        payload[key] = float(sim_val)
+        if spec.get("link_deltas") and real is not None:
+            shock = float(sim_val) - float(real)
+            for dkey in ("delta_chomage_1a", "delta_chomage_5a"):
+                if payload.get(dkey) is not None:
+                    payload[dkey] = float(payload[dkey]) + shock
+    # Garde les leviers what-if dans l'enveloppe (y compris apres link_deltas)
+    for key, spec in WHATIF_METRICS.items():
+        if payload.get(key) is None:
+            continue
+        lo, hi = spec["clamp"]
+        payload[key] = float(min(hi, max(lo, float(payload[key]))))
+    return payload
+
+
+def _metric_slider_block(key, baseline, value=None):
+    spec = WHATIF_METRICS[key]
+    lo, hi, step, marks, real = _slider_conf(key, baseline)
+    if value is None:
+        value = real
+    else:
+        value = _round_step(min(hi, max(lo, float(value))), step, spec["digits"])
+    return html.Div(className="ea-whatif-metric", children=[
+        html.Div(className="ea-whatif-head", children=[
+            html.Label(spec["question"], className="ea-label mb-0"),
+            html.Span(
+                id={"type": "p-readout", "metric": key},
+                children=_fmt_num(value, spec["unit"], spec["digits"]),
+                className="ea-whatif-value",
+            ),
+        ]),
+        dcc.Slider(
+            id={"type": "p-slider", "metric": key},
+            min=lo,
+            max=hi,
+            step=step,
+            value=value,
+            marks=marks,
+            tooltip={"placement": "bottom", "always_visible": False},
+            className="ea-slider",
+        ),
+    ])
+
+
 def layout_predict(depts):
     depts = depts or []
-    opts = dept_dropdown_options(depts)
-    default = "75" if "75" in depts else (depts[0] if depts else None)
+    opts = [{"label": "France (national)", "value": "FR"}] + dept_dropdown_options(depts)
+    default = "FR"
     metric_opts = [{"label": spec["short"], "value": key} for key, spec in WHATIF_METRICS.items()]
     return html.Div([
         html.Div(className="ea-panel mb-3", children=[
-            html.H2("Prédiction", className="ea-section-title"),
+            html.H2("Prédiction what-if", className="ea-section-title"),
             html.P(
-                "Choisissez un département, puis l'indicateur à simuler. "
-                "Le modèle part de la situation réelle : un levier à la fois.",
+                "Prévision France (agrégat national) sur 1 / 2 / 3 ans (sujet préfecture). "
+                "Choisissez les métriques à simuler : les autres restent à la moyenne nationale. "
+                "Un département reste disponible en option pour un zoom territorial.",
                 className="ea-section-lead",
             ),
             html.Div([
-                html.Label("Département", className="ea-label"),
+                html.Label("Périmètre", className="ea-label"),
                 dcc.Dropdown(
                     id="p-dept",
                     options=opts,
                     value=default,
                     clearable=False,
-                    placeholder="Choisir un département",
+                    placeholder="France (national)",
                     style={"maxWidth": 420},
                 ),
             ], className="mb-3"),
             dcc.Store(id="p-baseline"),
+            dcc.Store(id="p-scenario", data=None),
             html.Div(id="p-context"),
             html.Div([
-                html.Label("Indicateur à simuler", className="ea-label"),
+                html.Label("Scénarios France", className="ea-label"),
+                html.P(
+                    "Trois trajectoires types, en plus de la baseline nationale. "
+                    "Un clic charge les chocs socio-éco et aligne l’horizon.",
+                    className="ea-metric-sub mb-2",
+                ),
+                html.Div(className="ea-scenario-grid", children=[
+                    html.Button(
+                        [
+                            html.Span(SCENARIOS["crise"]["label"], className="ea-scenario-title"),
+                            html.Span(SCENARIOS["crise"]["blurb"], className="ea-scenario-blurb"),
+                        ],
+                        id="p-sc-crise", n_clicks=0, type="button",
+                        className="ea-scenario-card ea-scenario-crise",
+                    ),
+                    html.Button(
+                        [
+                            html.Span(SCENARIOS["reprise"]["label"], className="ea-scenario-title"),
+                            html.Span(SCENARIOS["reprise"]["blurb"], className="ea-scenario-blurb"),
+                        ],
+                        id="p-sc-reprise", n_clicks=0, type="button",
+                        className="ea-scenario-card ea-scenario-reprise",
+                    ),
+                    html.Button(
+                        [
+                            html.Span(SCENARIOS["tension"]["label"], className="ea-scenario-title"),
+                            html.Span(SCENARIOS["tension"]["blurb"], className="ea-scenario-blurb"),
+                        ],
+                        id="p-sc-tension", n_clicks=0, type="button",
+                        className="ea-scenario-card ea-scenario-tension",
+                    ),
+                ]),
+                html.Div(id="p-scenario-badge", className="mt-2"),
+            ], className="mb-4"),
+            html.Div([
+                html.Label("Horizon de prévision", className="ea-label"),
                 dcc.RadioItems(
-                    id="p-metric",
+                    id="p-horizon",
+                    options=[
+                        {"label": "1 an", "value": 1},
+                        {"label": "2 ans", "value": 2},
+                        {"label": "3 ans", "value": 3},
+                    ],
+                    value=1,
+                    inline=True,
+                    className="ea-horizon-picks",
+                    inputClassName="ea-metric-pick-input",
+                    labelClassName="ea-metric-pick",
+                ),
+                html.P(
+                    "Plus l’horizon est lointain, plus l’incertitude est élargie "
+                    "(tendances socio-éco extrapolées).",
+                    className="ea-metric-sub mb-0 mt-2",
+                ),
+            ], className="mb-4"),
+            html.Div([
+                html.Label("Métriques à simuler via le modèle", className="ea-label"),
+                dcc.Checklist(
+                    id="p-metrics",
                     options=metric_opts,
-                    value="taux_chomage_n1",
+                    value=["taux_chomage_n1"],
                     inline=True,
                     className="ea-metric-picks",
                     inputClassName="ea-metric-pick-input",
                     labelClassName="ea-metric-pick",
                 ),
-            ]),
-            html.Div(className="ea-whatif", children=[
-                html.Div(className="ea-whatif-head", children=[
-                    html.Label(id="p-whatif-label", children="Et si le chômage était de…",
-                               className="ea-label mb-0"),
-                    html.Span(id="p-readout", className="ea-whatif-value"),
-                ]),
-                dcc.Slider(
-                    id="p-slider",
-                    min=3,
-                    max=18,
-                    step=0.1,
-                    value=8.0,
-                    marks={3: "3 %", 8: "8 %", 13: "13 %", 18: "18 %"},
-                    tooltip={"placement": "bottom", "always_visible": False},
-                    className="ea-slider",
+                html.P(
+                    "Cochez un ou plusieurs leviers. "
+                    "Les métriques non cochées restent à leur valeur réelle (France ou département).",
+                    className="ea-metric-sub mb-0 mt-2",
                 ),
-                html.Div(className="ea-scenarios", children=[
-                    html.Button("Situation réelle", id="p-sc-real", n_clicks=0,
-                                type="button", className="ea-chip"),
-                    html.Button("Moins de chômage (−2 pts)", id="p-sc-down", n_clicks=0,
-                                type="button", className="ea-chip"),
-                    html.Button("Plus de chômage (+2 pts)", id="p-sc-up", n_clicks=0,
-                                type="button", className="ea-chip"),
-                ]),
+            ], className="mb-2"),
+            html.Div(id="p-sliders", className="ea-whatif"),
+            html.Div(className="ea-scenarios", children=[
+                html.Button(
+                    "Réinitialiser (situation réelle)",
+                    id="p-sc-real",
+                    n_clicks=0,
+                    type="button",
+                    className="ea-chip",
+                ),
             ]),
         ]),
         html.Div(id="p-winner"),
         dcc.Loading(dcc.Graph(id="p-graph", config={"displayModeBar": False}), type="dot"),
+        dcc.Loading(dcc.Graph(id="p-graph-horizons", config={"displayModeBar": False}), type="dot"),
+        dcc.Loading(dcc.Graph(id="p-graph-scenarios", config={"displayModeBar": False}), type="dot"),
     ])
 
 
 def _predict_context(row):
     annee = row.get("annee")
+    annee_cible = row.get("annee_cible")
     dept = str(row.get("code_dept", "")).strip()
-    lib = dept_label_map().get(dept) or row.get("libelle") or dept
+    is_fr = dept == "FR" or row.get("perimetre") == "france"
+    lib = "France" if is_fr else (dept_label_map().get(dept) or row.get("libelle") or dept)
+    if is_fr and row.get("n_departements"):
+        ref = f"France · baseline {annee} ({row['n_departements']} depts)" if annee else "France"
+    else:
+        ref = f"{lib} · baseline {annee}" if annee else lib
+    if annee_cible:
+        ref = f"{ref} → cible {annee_cible}"
     prec = row.get("bloc_gagnant_precedent")
     obs = row.get("bloc_gagnant")
+    chom_label = "Chômage moyen" if is_fr else "Chômage réel"
+    obs_label = f"Majorité {annee}" if is_fr and annee else (f"Observé {annee}" if annee else "Observé")
+    cible_label = f"Cible prévision" if annee_cible else "Cible"
     return html.Div(className="ea-snap", children=[
         html.Div([
             html.Div("Référence", className="ea-metric-label"),
-            html.Div(f"{lib} · {annee}" if annee else lib, className="ea-snap-value"),
+            html.Div(ref, className="ea-snap-value"),
         ], className="ea-snap-item"),
         html.Div([
-            html.Div("Chômage réel", className="ea-metric-label"),
+            html.Div(cible_label, className="ea-metric-label"),
+            html.Div(str(annee_cible) if annee_cible else "—", className="ea-snap-value"),
+        ], className="ea-snap-item"),
+        html.Div([
+            html.Div(chom_label, className="ea-metric-label"),
             html.Div(_fmt_num(row.get("taux_chomage_n1"), " %"), className="ea-snap-value"),
         ], className="ea-snap-item"),
         html.Div([
@@ -1195,14 +1371,14 @@ def _predict_context(row):
             html.Div(_fmt_num(row.get("creations_entreprises_n1"), digits=0), className="ea-snap-value"),
         ], className="ea-snap-item"),
         html.Div([
-            html.Div("Bloc précédent", className="ea-metric-label"),
+            html.Div("Bloc précédent (lag)", className="ea-metric-label"),
             html.Div(
                 f"{prec} — {BLOCS_LABELS.get(prec, prec)}" if prec else "—",
                 className="ea-snap-value",
             ),
         ], className="ea-snap-item"),
         html.Div([
-            html.Div(f"Observé {annee}" if annee else "Observé", className="ea-metric-label"),
+            html.Div(obs_label, className="ea-metric-label"),
             html.Div(
                 f"{obs} — {BLOCS_LABELS.get(obs, obs)}" if obs else "—",
                 className="ea-snap-value",
@@ -1218,79 +1394,139 @@ def _predict_context(row):
 )
 def load_predict_baseline(dept):
     if not dept:
-        return None, html.P("Choisissez un département.", className="text-muted")
+        return None, html.P("Choisissez un périmètre (France ou département).", className="text-muted")
     row = api_get("/predict/baseline", dept=dept)
     if not row:
+        label = "France" if str(dept).upper() in ("FR", "FRANCE") else f"le département {dept}"
         return None, dbc.Alert(
-            f"Pas de données GOLD pour le département {dept}.",
+            f"Pas de données GOLD pour {label}.",
             color="warning", className="py-2",
         )
     return row, _predict_context(row)
 
 
 @app.callback(
-    Output("p-slider", "min"),
-    Output("p-slider", "max"),
-    Output("p-slider", "step"),
-    Output("p-slider", "marks"),
-    Output("p-slider", "value"),
-    Output("p-whatif-label", "children"),
-    Output("p-sc-down", "children"),
-    Output("p-sc-up", "children"),
-    Input("p-baseline", "data"),
-    Input("p-metric", "value"),
+    Output("p-scenario", "data"),
+    Output("p-metrics", "value"),
+    Output("p-horizon", "value"),
+    Output("p-scenario-badge", "children"),
+    Input("p-sc-crise", "n_clicks"),
+    Input("p-sc-reprise", "n_clicks"),
+    Input("p-sc-tension", "n_clicks"),
     Input("p-sc-real", "n_clicks"),
-    Input("p-sc-down", "n_clicks"),
-    Input("p-sc-up", "n_clicks"),
+    prevent_initial_call=True,
 )
-def set_predict_slider(baseline, metric, _real, _down, _up):
-    key = metric if metric in WHATIF_METRICS else "taux_chomage_n1"
-    spec = WHATIF_METRICS[key]
-    lo, hi, step, marks, real = _slider_conf(key, baseline)
-    down_lab, up_lab = _shock_labels(key)
+def apply_scenario(_crise, _reprise, _tension, _real):
     tid = dash.callback_context.triggered_id
-    value = real
-    if tid == "p-sc-down":
-        value = _round_step(max(lo, real - spec["shock"]), step, spec["digits"])
-    elif tid == "p-sc-up":
-        value = _round_step(min(hi, real + spec["shock"]), step, spec["digits"])
-    return lo, hi, step, marks, value, spec["question"], down_lab, up_lab
+    if tid == "p-sc-real" or tid is None:
+        return None, ["taux_chomage_n1"], no_update, html.Div()
+    key = {
+        "p-sc-crise": "crise",
+        "p-sc-reprise": "reprise",
+        "p-sc-tension": "tension",
+    }.get(tid)
+    if not key or key not in SCENARIOS:
+        return no_update, no_update, no_update, no_update
+    sc = SCENARIOS[key]
+    metrics = list(sc["deltas"].keys())
+    badge = html.Div(className=f"ea-scenario-badge ea-scenario-{key}", children=[
+        html.Strong(f"Scénario actif : {sc['label']}"),
+        html.Span(f" — {sc['blurb']} (horizon {sc['horizon']} ans)"),
+    ])
+    return key, metrics, sc["horizon"], badge
+
+
+@app.callback(
+    Output("p-sliders", "children"),
+    Input("p-baseline", "data"),
+    Input("p-metrics", "value"),
+    Input("p-scenario", "data"),
+    Input("p-sc-real", "n_clicks"),
+)
+def render_predict_sliders(baseline, metrics, scenario, _reset):
+    selected = [m for m in (metrics or []) if m in WHATIF_METRICS]
+    if not selected:
+        return html.P(
+            "Cochez au moins une métrique pour activer la simulation.",
+            className="text-muted mt-2",
+        )
+    if not baseline:
+        return html.P("Choisissez un périmètre.", className="text-muted mt-2")
+    overrides = {}
+    if scenario and scenario in SCENARIOS:
+        overrides = _apply_deltas(baseline, SCENARIOS[scenario]["deltas"])
+    return [
+        _metric_slider_block(key, baseline, overrides.get(key))
+        for key in selected
+    ]
+
+
+@app.callback(
+    Output({"type": "p-readout", "metric": ALL}, "children"),
+    Input({"type": "p-slider", "metric": ALL}, "value"),
+    State({"type": "p-slider", "metric": ALL}, "id"),
+)
+def update_slider_readouts(values, ids):
+    if not ids:
+        return []
+    out = []
+    for val, sid in zip(values or [], ids):
+        key = sid["metric"]
+        spec = WHATIF_METRICS[key]
+        out.append(_fmt_num(val, spec["unit"], spec["digits"]))
+    return out
 
 
 @app.callback(
     Output("p-graph", "figure"),
+    Output("p-graph-horizons", "figure"),
     Output("p-winner", "children"),
-    Output("p-readout", "children"),
-    Input("p-slider", "value"),
     Input("p-baseline", "data"),
-    Input("p-metric", "value"),
+    Input("p-horizon", "value"),
+    Input("p-metrics", "value"),
+    Input("p-scenario", "data"),
+    Input({"type": "p-slider", "metric": ALL}, "value"),
+    State({"type": "p-slider", "metric": ALL}, "id"),
 )
-def predict_fig(sim_val, baseline, metric):
-    key = metric if metric in WHATIF_METRICS else "taux_chomage_n1"
-    spec = WHATIF_METRICS[key]
-    tid = dash.callback_context.triggered_id
-    # Au changement de levier / département, ignorer l'ancienne valeur du curseur.
-    if tid in ("p-metric", "p-baseline") or sim_val is None:
-        sim_val = _metric_real(baseline, key)
-    readout = _fmt_num(sim_val, spec["unit"], spec["digits"])
+def predict_fig(baseline, horizon, metrics, scenario, slider_vals, slider_ids):
+    horizon = int(horizon or 1)
+    if horizon not in (1, 2, 3):
+        horizon = 1
     if not baseline:
-        return empty_fig("Choisissez un département"), html.Div(), readout
+        empty = empty_fig("Choisissez un périmètre")
+        return empty, empty, html.Div()
 
-    payload = {k: baseline.get(k) for k in PREDICT_FEATURES}
-    payload[key] = float(sim_val)
-    real = baseline.get(key)
-    if spec.get("link_deltas") and real is not None:
-        shock = float(sim_val) - float(real)
-        for dkey in ("delta_chomage_1a", "delta_chomage_5a"):
-            if payload.get(dkey) is not None:
-                payload[dkey] = float(payload[dkey]) + shock
+    selected = set(m for m in (metrics or []) if m in WHATIF_METRICS)
+    sim_notes = []
+    overrides = {}
+    for val, sid in zip(slider_vals or [], slider_ids or []):
+        key = sid["metric"]
+        if key in selected:
+            overrides[key] = float(val)
 
+    payload = _build_payload(baseline, overrides)
+    for key, sim_val in overrides.items():
+        spec = WHATIF_METRICS[key]
+        real = baseline.get(key)
+        sim_notes.append(
+            f"{spec['short']} {_fmt_num(sim_val, spec['unit'], spec['digits'])}"
+            + (
+                f" (réel {_fmt_num(real, spec['unit'], spec['digits'])})"
+                if real is not None else ""
+            )
+        )
+
+    payload["horizon_ans"] = horizon
     code, body = api_post("/predict", payload)
     if code >= 400:
-        return empty_fig(f"Erreur API {code} : {body.get('detail', body)}"), html.Div(), readout
-    proba = body.get("probabilites") or {}
+        err = empty_fig(f"Erreur API {code} : {body.get('detail', body)}")
+        return err, err, html.Div()
+
+    par_h = body.get("probabilites_par_horizon") or {}
+    proba = body.get("probabilites") or par_h.get(str(horizon)) or {}
     if not proba:
-        return empty_fig("Pas de probabilités"), html.Div(), readout
+        empty = empty_fig("Pas de probabilités")
+        return empty, empty, html.Div()
 
     if max(proba.values()) > 1.5:
         proba = {k: v / 100.0 for k, v in proba.items()}
@@ -1313,7 +1549,7 @@ def predict_fig(sim_val, baseline, metric):
         textfont=dict(color=PAPER, size=13),
         hovertemplate="%{y} : %{x:.1%}<extra></extra>",
     ))
-    base_layout(fig, "Probabilités de bloc en tête", height=380)
+    base_layout(fig, f"Probabilités à {horizon} an{'s' if horizon > 1 else ''}", height=360)
     fig.update_layout(
         xaxis=dict(range=[0, 1], tickvals=[0, 0.25, 0.5, 0.75, 1],
                    ticktext=["0 %", "25 %", "50 %", "75 %", "100 %"], title=""),
@@ -1322,34 +1558,185 @@ def predict_fig(sim_val, baseline, metric):
     )
     fig.add_vline(x=0.5, line_dash="dash", line_color="rgba(11,31,51,0.25)")
 
-    tol = max(spec["step"] * 0.6, 0.05)
-    same = real is not None and abs(float(sim_val) - float(real)) < tol
-    obs = baseline.get("bloc_gagnant")
+    fig_h = go.Figure()
+    blocs_order = [b for b in BLOCS if any(b in (par_h.get(str(h)) or {}) for h in (1, 2, 3))]
+    if not blocs_order:
+        blocs_order = list(proba.keys())
+    for h in (1, 2, 3):
+        ph = par_h.get(str(h)) or {}
+        if ph and max(ph.values()) > 1.5:
+            ph = {k: v / 100.0 for k, v in ph.items()}
+        fig_h.add_trace(go.Bar(
+            name=f"{h} an" if h == 1 else f"{h} ans",
+            x=blocs_order,
+            y=[ph.get(b, 0) for b in blocs_order],
+            marker_color=[COLORS.get(b, MUTED) for b in blocs_order],
+            opacity=0.55 if h != horizon else 1.0,
+            hovertemplate="%{x} · " + (f"{h} an" if h == 1 else f"{h} ans")
+            + " : %{y:.1%}<extra></extra>",
+        ))
+    base_layout(fig_h, "Comparaison des horizons 1 / 2 / 3 ans", height=340)
+    fig_h.update_layout(
+        barmode="group",
+        yaxis=dict(range=[0, 1], tickformat=".0%", title=""),
+        xaxis_title="",
+        legend=legend_below(3),
+        margin=dict(l=48, r=24, b=72, t=56),
+    )
+
     annee = baseline.get("annee")
-    if same and obs:
+    annee_cible = baseline.get("annee_cible")
+    obs = baseline.get("bloc_gagnant")
+    is_fr = str(baseline.get("code_dept", "")).upper() == "FR" or baseline.get("perimetre") == "france"
+    scope = "France" if is_fr else f"référence {annee}"
+    cible_txt = f" · cible {annee_cible}" if annee_cible else ""
+    sc_label = SCENARIOS[scenario]["label"] if scenario in SCENARIOS else None
+    if sc_label:
         note = (
-            f"Scénario = situation réelle {annee}. "
-            f"Observé : {obs} — {BLOCS_LABELS.get(obs, obs)}."
+            f"Scénario « {sc_label} » · horizon {horizon} an{'s' if horizon > 1 else ''} · "
+            f"baseline {scope}"
+            + (f" ({annee})" if is_fr and annee else "")
+            + cible_txt
+            + "."
         )
-    elif real is not None:
+        if sim_notes:
+            note += f" Leviers : {'; '.join(sim_notes)}."
+    elif sim_notes:
         note = (
-            f"{spec['label']} simulé {_fmt_num(sim_val, spec['unit'], spec['digits'])} "
-            f"(réel {_fmt_num(real, spec['unit'], spec['digits'])}). "
-            f"Les autres indicateurs restent ceux de {annee}."
+            f"Horizon {horizon} an{'s' if horizon > 1 else ''} · "
+            f"leviers : {'; '.join(sim_notes)}. "
+            f"Baseline {scope}"
+            + (f" ({annee})" if is_fr and annee else "")
+            + cible_txt
+            + "."
         )
     else:
-        note = "Prédiction indicative — limites du modèle assumées."
+        note = (
+            f"Horizon {horizon} an{'s' if horizon > 1 else ''} · "
+            f"aucune métrique simulée (baseline {scope}"
+            + (f" {annee}" if annee else "")
+            + cible_txt
+            + ")."
+        )
+        if obs:
+            label_obs = "Majorité nationale" if is_fr else "Observé"
+            note += f" {label_obs} : {obs} — {BLOCS_LABELS.get(obs, obs)}."
 
-    winner_box = html.Div(className="pred-winner", children=[
-        html.Div("Bloc prédit", className="ea-metric-label"),
-        html.Div(
-            f"{winner} — {BLOCS_LABELS.get(winner, winner)} ({win_p:.0%})",
-            className="ea-metric-value",
-            style={"fontSize": "1.55rem"},
-        ),
-        html.P(note, className="ea-metric-sub mb-0 mt-2"),
-    ])
-    return fig, winner_box, readout
+    hors = body.get("hors_enveloppe") or []
+    if hors:
+        details = ", ".join(
+            f"{o.get('feature')}={o.get('valeur')} ∉ [{o.get('min')}; {o.get('max')}]"
+            for o in hors
+        )
+        winner_box = html.Div(className="pred-winner", children=[
+            dbc.Alert(
+                [
+                    html.Strong("Hors enveloppe d'entraînement — prédiction non conclusive. "),
+                    html.Span(
+                        "Au moins une feature dépasse le min/max observé à l'entraînement ; "
+                        "le modèle (arbre / forêt) ne généralise pas au-delà. "
+                        f"Dépassements : {details}."
+                    ),
+                ],
+                color="warning",
+                className="mb-2 py-2",
+            ),
+            html.Div(
+                f"Distribution indicative à {horizon} an{'s' if horizon > 1 else ''} "
+                f"(après clamp) — pas de vainqueur tranché",
+                className="ea-metric-label",
+            ),
+            html.Div(
+                f"Tête de liste technique : {winner} — {BLOCS_LABELS.get(winner, winner)} "
+                f"({win_p:.0%})",
+                className="ea-metric-sub",
+                style={"fontSize": "1.05rem"},
+            ),
+            html.P(note, className="ea-metric-sub mb-0 mt-2"),
+        ])
+    else:
+        winner_box = html.Div(className="pred-winner", children=[
+            html.Div(
+                f"Bloc prédit à {horizon} an{'s' if horizon > 1 else ''}"
+                + (f" (cible {annee_cible})" if annee_cible else ""),
+                className="ea-metric-label",
+            ),
+            html.Div(
+                f"{winner} — {BLOCS_LABELS.get(winner, winner)} ({win_p:.0%})",
+                className="ea-metric-value",
+                style={"fontSize": "1.55rem"},
+            ),
+            html.P(note, className="ea-metric-sub mb-0 mt-2"),
+            html.P(
+                "Prédiction indicative — limites du modèle assumées "
+                "(extrapolation des tendances + incertitude croissante).",
+                className="ea-metric-sub mb-0 mt-1",
+            ),
+        ])
+    return fig, fig_h, winner_box
+
+
+@app.callback(
+    Output("p-graph-scenarios", "figure"),
+    Input("p-baseline", "data"),
+    Input("p-horizon", "value"),
+)
+def predict_scenarios_compare(baseline, horizon):
+    """Compare baseline France + 3 scénarios au même horizon."""
+    horizon = int(horizon or 1)
+    if horizon not in (1, 2, 3):
+        horizon = 1
+    if not baseline:
+        return empty_fig("Choisissez un périmètre")
+
+    series = [("Baseline France", {})]
+    for key, sc in SCENARIOS.items():
+        series.append((sc["label"], _apply_deltas(baseline, sc["deltas"])))
+
+    results = []
+    for name, overrides in series:
+        payload = _build_payload(baseline, overrides)
+        payload["horizon_ans"] = horizon
+        code, body = api_post("/predict", payload)
+        if code >= 400:
+            return empty_fig(f"Erreur API {code}")
+        proba = body.get("probabilites") or {}
+        if proba and max(proba.values()) > 1.5:
+            proba = {k: v / 100.0 for k, v in proba.items()}
+        results.append((name, proba))
+
+    blocs_order = [b for b in BLOCS if any(b in p for _, p in results)]
+    if not blocs_order:
+        blocs_order = sorted({b for _, p in results for b in p})
+
+    palette = {
+        "Baseline France": "#5A6B7D",
+        SCENARIOS["crise"]["label"]: "#C8102E",
+        SCENARIOS["reprise"]["label"]: "#2A5F9E",
+        SCENARIOS["tension"]["label"]: "#C4922A",
+    }
+    fig = go.Figure()
+    for name, proba in results:
+        fig.add_trace(go.Bar(
+            name=name,
+            x=blocs_order,
+            y=[proba.get(b, 0) for b in blocs_order],
+            marker_color=palette.get(name, MUTED),
+            hovertemplate="%{x} · " + name + " : %{y:.1%}<extra></extra>",
+        ))
+    base_layout(
+        fig,
+        f"Scénarios vs baseline — horizon {horizon} an{'s' if horizon > 1 else ''}",
+        height=380,
+    )
+    fig.update_layout(
+        barmode="group",
+        yaxis=dict(range=[0, 1], tickformat=".0%", title=""),
+        xaxis_title="",
+        legend=legend_below(4),
+        margin=dict(l=48, r=24, b=80, t=56),
+    )
+    return fig
 
 
 if __name__ == "__main__":

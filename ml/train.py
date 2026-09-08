@@ -8,12 +8,20 @@ Protocole :
      pour chaque scrutin Y, train = annees < Y, test = Y.
      C'est la metrique de SELECTION (robustesse prospective).
   3. CV geographique GroupKFold (par departement) en metrique secondaire.
-  4. Holdout final = dernier scrutin (2022), coherent avec le walk-forward.
+  4. Holdout final = dernier scrutin (2022) : metrique REPORTEE uniquement,
+     jamais utilisee pour choisir le modele ni la grille GB (anti data-snooping).
   5. Comparaison baseline / logreg / arbre / RF / gradient boosting.
 
 Pourquoi pas seulement GroupKFold ?
   La CV geo melange les annees et favorise des modeles "stickiness"
   (ex. RF) qui echouent sur une recomposition politique (2022).
+
+Selection :
+  score = 0.6 * accuracy_walkforward_hors_holdout
+        + 0.4 * f1_macro_walkforward_hors_holdout.
+  La moyenne walk-forward tous plis (accuracy_walkforward) est reportée
+  mais ne sert jamais au choix — sinon le holdout reviendrait dans le critère
+  dès qu'il n'y a que deux plis (cas actuel après exclusion de 2007).
 """
 from __future__ import annotations
 
@@ -60,6 +68,66 @@ NUM_ALL = [
 ]
 CAT = ["bloc_gagnant_precedent"]
 
+# Arbitrage creations_entreprises_n1 / scrutin 2007
+# -------------------------------------------------
+# Fait : creations_entreprises_n1 est manquante a 100 % sur 2007 (source INSEE
+# demarrant en 2009). SimpleImputer(median) attribuait une constante a toute la
+# cohorte, alors que c'etait la 3e variable en importance du modele — artefact.
+#
+# Option A (retenue) : exclure le scrutin 2007 (−96 observations). Il reste
+# 3 scrutins (2012, 2017, 2022) et donc un seul pli de selection (2017, entraine
+# sur 2012 seul). Consequence assumee : protocole de selection fragile.
+#
+# Option B (ecartee) : supprimer la variable creations_entreprises_n1 et
+# conserver 2007, ce qui aurait preserve 3 plis walk-forward (2012, 2017, 2022).
+# Ecartee car la feature porte un signal socio-economique utile et que l'imputation
+# silencieuse sur une annee entiere etait le probleme principal a eliminer.
+_annees_creations_absentes = [
+    int(a) for a, s in df.groupby("annee")["creations_entreprises_n1"]
+    if s.isna().all()
+]
+_n_avant_filtre = len(df)
+if _annees_creations_absentes:
+    df = df[~df["annee"].isin(_annees_creations_absentes)].reset_index(drop=True)
+_DECISIONS_FEATURES = {
+    "creations_entreprises_n1": {
+        "choix": "exclure_observations_annee_entiere_null",
+        "option_retenue": "A",
+        "annees_exclues": _annees_creations_absentes,
+        "n_observations_exclues": int(_n_avant_filtre - len(df)),
+        "fait": (
+            "creations_entreprises_n1 manquante a 100 % sur le scrutin 2007 "
+            "(source INSEE demarrant en 2009) ; SimpleImputer(median) attribuait "
+            "une constante a toute la cohorte alors que c'etait la 3e variable "
+            "en importance."
+        ),
+        "option_A_retenue": (
+            "Exclure le scrutin 2007 (−96 observations). Il reste 3 scrutins "
+            "(2012, 2017, 2022) et donc un seul pli de selection (2017, entraine "
+            "sur 2012 seul, 96 observations)."
+        ),
+        "option_B_ecartee": (
+            "Supprimer la variable creations_entreprises_n1 et conserver 2007, "
+            "ce qui aurait preserve 3 plis walk-forward (2012, 2017, 2022)."
+        ),
+        "justification": (
+            "On elimine l'artefact d'imputation sur une cohorte entiere et on "
+            "conserve une feature informative. Consequence assumee : le protocole "
+            "de selection ne repose plus que sur un seul pli anterieur au holdout, "
+            "ce qui fragilise la robustesse de la comparaison des modeles."
+        ),
+        "motif": (
+            "Source INSEE creations d'entreprises demarre en 2009 : cohorte 2007 "
+            "entierement manquante. Imputer une constante a 100 % d'un scrutin "
+            "introduit un artefact ; on drop les lignes, on conserve la feature."
+        ),
+    },
+    "taux_pauvrete_n1": {
+        "choix": "exclure_variable",
+        "motif": "Couverture trop courte (scrutins 2017/2022 seulement).",
+    },
+}
+
 df = df.dropna(subset=["taux_chomage_n1"]).reset_index(drop=True)
 NUM = [c for c in NUM_ALL if df[c].notna().any()]
 if not NUM:
@@ -84,9 +152,14 @@ def make(model):
 
 
 def walk_forward_scores(pipe) -> dict:
-    """Leave-one-election-out : train = annees < Y, test = Y."""
+    """Leave-one-election-out : train = annees < Y, test = Y.
+
+    Retourne la moyenne tous plis (métrique reportée) et la moyenne hors
+    holdout (seule métrique autorisée pour la sélection des modèles).
+    """
     per_year = {}
     accs, f1s = [], []
+    accs_sel, f1s_sel = [], []
     for y_test in years[1:]:
         tr = df["annee"] < y_test
         te = df["annee"] == y_test
@@ -105,23 +178,69 @@ def walk_forward_scores(pipe) -> dict:
         }
         accs.append(acc)
         f1s.append(f1)
+        if int(y_test) != holdout_year:
+            accs_sel.append(acc)
+            f1s_sel.append(f1)
     return {
         "par_scrutin": per_year,
         "accuracy_walkforward": round(float(np.mean(accs)), 3) if accs else 0.0,
         "f1_macro_walkforward": round(float(np.mean(f1s)), 3) if f1s else 0.0,
+        "accuracy_walkforward_hors_holdout": (
+            round(float(np.mean(accs_sel)), 3) if accs_sel else 0.0
+        ),
+        "f1_macro_walkforward_hors_holdout": (
+            round(float(np.mean(f1s_sel)), 3) if f1s_sel else 0.0
+        ),
         "accuracy_holdout": per_year.get(str(holdout_year), {}).get("accuracy", 0.0),
         "f1_macro_holdout": per_year.get(str(holdout_year), {}).get("f1_macro", 0.0),
     }
 
 
 def _selection_score(m: dict) -> float:
-    return 0.4 * float(m["accuracy_walkforward"]) + 0.6 * float(m["accuracy_test_2022"])
+    """Score de sélection : walk-forward hors holdout exclusivement.
+
+    Utilise accuracy_walkforward_hors_holdout et f1_macro_walkforward_hors_holdout.
+    La moyenne tous plis (accuracy_walkforward) contient le holdout dès qu'il
+    figure dans years[1:] — elle est reportée, jamais utilisée pour choisir.
+    """
+    return (
+        0.6 * float(m["accuracy_walkforward_hors_holdout"])
+        + 0.4 * float(m["f1_macro_walkforward_hors_holdout"])
+    )
 
 
-# Mini-grille GB (compétence C4) — meme score walk-forward / holdout
+def _wf_hors_holdout(wf: dict) -> float:
+    """Accuracy walk-forward hors holdout (clé dédiée ou repli sur par_scrutin)."""
+    if "accuracy_walkforward_hors_holdout" in wf:
+        return float(wf["accuracy_walkforward_hors_holdout"])
+    accs = [
+        float(v["accuracy"])
+        for y, v in (wf.get("par_scrutin") or {}).items()
+        if int(y) != holdout_year
+    ]
+    return float(np.mean(accs)) if accs else 0.0
+
+
+def _f1_hors_holdout(wf: dict) -> float:
+    """F1 macro walk-forward hors holdout."""
+    if "f1_macro_walkforward_hors_holdout" in wf:
+        return float(wf["f1_macro_walkforward_hors_holdout"])
+    f1s = [
+        float(v["f1_macro"])
+        for y, v in (wf.get("par_scrutin") or {}).items()
+        if int(y) != holdout_year
+    ]
+    return float(np.mean(f1s)) if f1s else 0.0
+
+
+# Plis réellement utilisés pour la sélection (années < holdout dans years[1:])
+PLIS_SELECTION = [y for y in years[1:] if y != holdout_year]
+
+
+# Mini-grille GB (compétence C4) — tri sur walk-forward hors holdout
 gb_grid = []
 for n_est, depth, lr in [
-    (200, 3, 0.1),   # config de reference (meilleur holdout empirique)
+    (200, 3, 0.1),   # config de reference
     (150, 2, 0.1),
     (200, 3, 0.05),
     (250, 2, 0.08),
@@ -134,11 +253,15 @@ for n_est, depth, lr in [
     gb_grid.append((name, pipe, wf))
 
 gb_grid.sort(key=lambda t: (
-    0.4 * t[2]["accuracy_walkforward"] + 0.6 * t[2]["accuracy_holdout"],
-    t[2]["f1_macro_walkforward"],
+    t[2]["accuracy_walkforward_hors_holdout"],
+    t[2]["f1_macro_walkforward_hors_holdout"],
 ), reverse=True)
 best_gb_name, best_gb_pipe, best_gb_wf = gb_grid[0]
-print(f"Meilleur GB grille : {best_gb_name} holdout={best_gb_wf['accuracy_holdout']:.3f}")
+print(
+    f"Meilleur GB grille : {best_gb_name} "
+    f"wf_hors_holdout={best_gb_wf['accuracy_walkforward_hors_holdout']:.3f} "
+    f"holdout={best_gb_wf['accuracy_holdout']:.3f}"
+)
 
 models = {
     "baseline_classe_majoritaire": make(DummyClassifier(strategy="most_frequent")),
@@ -167,8 +290,12 @@ for name, pipe in models.items():
     acc_cv = cross_val_score(pipe, X, y, cv=cv_geo, groups=groups, scoring="accuracy")
     f1_cv = cross_val_score(pipe, X, y, cv=cv_geo, groups=groups, scoring="f1_macro")
     results[name] = {
+        # Moyenne tous plis : métrique reportée uniquement (contient le holdout)
         "accuracy_walkforward": wf["accuracy_walkforward"],
         "f1_macro_walkforward": wf["f1_macro_walkforward"],
+        # Critère de sélection : plis antérieurs au holdout uniquement
+        "accuracy_walkforward_hors_holdout": wf["accuracy_walkforward_hors_holdout"],
+        "f1_macro_walkforward_hors_holdout": wf["f1_macro_walkforward_hors_holdout"],
         f"accuracy_test_{holdout_year}": wf["accuracy_holdout"],
         f"f1_macro_test_{holdout_year}": wf["f1_macro_holdout"],
         "walkforward_par_scrutin": wf["par_scrutin"],
@@ -179,9 +306,15 @@ for name, pipe in models.items():
         "f1_macro_test_2022": wf["f1_macro_holdout"],
     }
 
-# Selection composite
+# Selection : hors holdout exclusivement (baseline exclue du choix)
 cand = {k: v for k, v in results.items() if k != "baseline_classe_majoritaire"}
-best_name = max(cand, key=lambda k: (_selection_score(cand[k]), cand[k]["f1_macro_walkforward"]))
+best_name = max(
+    cand,
+    key=lambda k: (
+        _selection_score(cand[k]),
+        cand[k]["f1_macro_walkforward_hors_holdout"],
+    ),
+)
 best = models[best_name]
 
 # Holdout final (dernier scrutin)
@@ -237,15 +370,54 @@ proba_mean = proba_rows.mean(axis=0)
 proj_base = dict(zip(best.classes_.tolist(), np.round(proba_mean, 3).tolist()))
 projection = {f"{h}_an(s)": proj_base for h in (1, 2, 3)}
 
+
+def _enveloppe_entrainement(frame: pd.DataFrame, cols: list) -> dict:
+    """min / max / p01 / p99 / moyenne / écart-type par feature numérique."""
+    out = {}
+    for c in cols:
+        if c not in frame.columns:
+            continue
+        s = pd.to_numeric(frame[c], errors="coerce").dropna()
+        if s.empty:
+            continue
+        out[c] = {
+            "min": round(float(s.min()), 4),
+            "max": round(float(s.max()), 4),
+            "p01": round(float(s.quantile(0.01)), 4),
+            "p99": round(float(s.quantile(0.99)), 4),
+            "moyenne": round(float(s.mean()), 4),
+            "ecart_type": round(float(s.std(ddof=1)), 4) if len(s) > 1 else 0.0,
+        }
+    return out
+
+
 report = {
     "n_observations": int(len(df)),
     "n_departements": int(df["code_dept"].nunique()),
     "protocole": {
-        "selection": "max 0.4*acc_walkforward + 0.6*acc_holdout (robustesse temporelle)",
+        "selection": "walk-forward hors holdout uniquement",
+        "formule_selection": (
+            "0.6*accuracy_walkforward_hors_holdout "
+            "+ 0.4*f1_macro_walkforward_hors_holdout"
+        ),
+        "plis_selection": PLIS_SELECTION,
+        "n_plis_selection": len(PLIS_SELECTION),
+        "avertissement": (
+            "La selection ne repose que sur le(s) pli(s) anterieur(s) au holdout. "
+            "Depuis l'exclusion de 2007, il ne reste qu'un seul pli de selection "
+            "(2017, entraine sur 2012 seul, 96 observations). Ce protocole est "
+            "fragile : un seul point de validation pour choisir le modele. "
+            "Le holdout 2022 est reporte comme test non vu et ne participe pas "
+            "au critere de choix. La moyenne accuracy_walkforward (tous plis) "
+            "contient le holdout et ne doit pas etre citee comme score de selection."
+        ),
         "holdout": holdout_year,
         "anti_leakage": "features <= N-1 (ETL) + split temporel",
         "cv_geographique": "GroupKFold par departement (metrique secondaire)",
+        "grille_gb": "tri sur moyenne walk-forward hors annee de holdout",
     },
+    "decisions_features": _DECISIONS_FEATURES,
+    "enveloppe_entrainement": _enveloppe_entrainement(df, NUM),
     "modeles_compares": results,
     "modele_retenu": best_name,
     "gb_grille": [
@@ -254,6 +426,9 @@ report = {
             "accuracy_walkforward": w["accuracy_walkforward"],
             "accuracy_holdout": w["accuracy_holdout"],
             "f1_macro_walkforward": w["f1_macro_walkforward"],
+            "accuracy_walkforward_hors_holdout": w["accuracy_walkforward_hors_holdout"],
+            "f1_macro_walkforward_hors_holdout": w["f1_macro_walkforward_hors_holdout"],
+            "accuracy_wf_hors_holdout": w["accuracy_walkforward_hors_holdout"],
         }
         for n, _, w in gb_grid
     ],
@@ -268,10 +443,24 @@ report = {
     "metriques_retenues": {
         "accuracy_walkforward": results[best_name]["accuracy_walkforward"],
         "f1_macro_walkforward": results[best_name]["f1_macro_walkforward"],
+        "accuracy_walkforward_hors_holdout": (
+            results[best_name]["accuracy_walkforward_hors_holdout"]
+        ),
+        "f1_macro_walkforward_hors_holdout": (
+            results[best_name]["f1_macro_walkforward_hors_holdout"]
+        ),
         "accuracy_holdout": results[best_name]["accuracy_test_2022"],
         "f1_macro_holdout": results[best_name]["f1_macro_test_2022"],
         "accuracy_cv_groupee": results[best_name]["accuracy_cv_groupee"],
-        "seuil_cdc_0_5": results[best_name]["accuracy_walkforward"] >= 0.5
+        "accuracy_baseline_holdout": (
+            results["baseline_classe_majoritaire"]["accuracy_test_2022"]
+        ),
+        "ecart_baseline_holdout": round(
+            float(results[best_name]["accuracy_test_2022"])
+            - float(results["baseline_classe_majoritaire"]["accuracy_test_2022"]),
+            3,
+        ),
+        "seuil_cdc_0_5": results[best_name]["accuracy_walkforward_hors_holdout"] >= 0.5
         or results[best_name]["accuracy_test_2022"] >= 0.5
         or results[best_name]["accuracy_cv_groupee"] >= 0.5,
     },
@@ -280,14 +469,20 @@ with open(f"{ROOT}/data/ml_report.json", "w", encoding="utf-8") as f:
     json.dump(report, f, indent=2, ensure_ascii=False)
 
 print(f"Observations: {len(df)} | Depts: {df['code_dept'].nunique()} | Holdout: {holdout_year}")
-print(f"Modele retenu (walk-forward): {best_name}")
+print(
+    f"Plis selection: {PLIS_SELECTION} (n={len(PLIS_SELECTION)}) | "
+    f"Modele retenu: {best_name}"
+)
 for n, r in results.items():
     print(
-        f"  {n:32s} wf_acc={r['accuracy_walkforward']:.3f} wf_f1={r['f1_macro_walkforward']:.3f} "
+        f"  {n:32s} sel_acc={r['accuracy_walkforward_hors_holdout']:.3f} "
+        f"sel_f1={r['f1_macro_walkforward_hors_holdout']:.3f} "
+        f"wf_all={r['accuracy_walkforward']:.3f} "
         f"holdout={r['accuracy_test_2022']:.3f} cv_geo={r['accuracy_cv_groupee']:.3f}"
     )
 print("Top features:", list(imp.items())[:3])
 print(
-    f"Seuil 0.5 : holdout={results[best_name]['accuracy_test_2022']:.3f} | "
-    f"CV geo={results[best_name]['accuracy_cv_groupee']:.3f}"
+    f"Holdout retenu={results[best_name]['accuracy_test_2022']:.3f} | "
+    f"baseline={results['baseline_classe_majoritaire']['accuracy_test_2022']:.3f} | "
+    f"ecart={report['metriques_retenues']['ecart_baseline_holdout']:.3f}"
 )

@@ -267,9 +267,67 @@ class Features(BaseModel):
 
 
 @app.get("/predict/baseline")
-def predict_baseline(dept: str = Query(..., min_length=1, max_length=3)):
-    """Dernière observation GOLD d'un département (contexte what-if)."""
+def predict_baseline(dept: str = Query("FR", min_length=1, max_length=10)):
+    """Baseline what-if : France (agrégat national) ou un département.
+
+    Usage prospectif : la dernière ligne GOLD (ex. 2022) sert de point de départ,
+    mais les lags politiques sont décalés — bloc / pct / marge « précédent »
+    deviennent ceux observés sur ce dernier scrutin, pour prédire le suivant
+    (annee_cible = annee + 5).
+
+    - dept=FR (défaut) : moyennes nationales sur le dernier scrutin GOLD
+      (bloc = mode / majorité des départements).
+    - sinon : dernière observation GOLD du département.
+    """
     code = dept.strip().upper()
+    if code in ("FR", "FRANCE", "NAT", "NATIONAL"):
+        q_year = text("SELECT MAX(annee) AS annee FROM gold_dataset_analytique")
+        ydf = pd.read_sql(q_year, engine)
+        if ydf.empty or pd.isna(ydf.iloc[0]["annee"]):
+            raise HTTPException(404, "Aucun historique GOLD")
+        annee = int(ydf.iloc[0]["annee"])
+        q = text("""
+            SELECT *
+            FROM gold_dataset_analytique
+            WHERE annee = :annee
+        """)
+        df = pd.read_sql(q, engine, params={"annee": annee})
+        if df.empty:
+            raise HTTPException(404, f"Aucune donnée GOLD pour {annee}")
+
+        num_cols = [
+            "taux_chomage_n1", "delta_chomage_1a", "delta_chomage_5a",
+            "emploi_pour_1000hab", "croissance_emploi_5a_pct", "croissance_pop_5a_pct",
+            "taux_pauvrete_n1", "creations_entreprises_n1",
+            "pct_gagnant", "marge_gagnante",
+            "pct_gagnant_precedent", "marge_gagnante_precedente",
+        ]
+        rec = {"annee": annee, "code_dept": "FR", "libelle": "France"}
+        for col in num_cols:
+            if col in df.columns:
+                val = pd.to_numeric(df[col], errors="coerce").mean()
+                rec[col] = None if pd.isna(val) else round(float(val), 3)
+
+        # Bloc majoritaire (mode) au niveau France
+        for col in ("bloc_gagnant", "bloc_gagnant_precedent"):
+            if col in df.columns and df[col].notna().any():
+                rec[col] = str(df[col].mode().iloc[0])
+            else:
+                rec[col] = None
+
+        # Ancrage prospectif : le gagnant 2022 devient le « précédent » pour 2027
+        if rec.get("bloc_gagnant") is not None:
+            rec["bloc_gagnant_precedent"] = rec["bloc_gagnant"]
+        if rec.get("pct_gagnant") is not None:
+            rec["pct_gagnant_precedent"] = rec["pct_gagnant"]
+        if rec.get("marge_gagnante") is not None:
+            rec["marge_gagnante_precedente"] = rec["marge_gagnante"]
+
+        rec["annee_cible"] = annee + 5
+        rec["n_departements"] = int(len(df))
+        rec["perimetre"] = "france"
+        return rec
+
     q = text("""
         SELECT g.*, d.libelle
         FROM gold_dataset_analytique g
@@ -282,12 +340,44 @@ def predict_baseline(dept: str = Query(..., min_length=1, max_length=3)):
     if df.empty:
         raise HTTPException(404, f"Aucun historique GOLD pour le département {code}")
     rec = _records(df)[0]
+    # Ancrage prospectif : lags = résultats du dernier scrutin observé
+    if rec.get("bloc_gagnant") is not None:
+        rec["bloc_gagnant_precedent"] = rec["bloc_gagnant"]
+    if rec.get("pct_gagnant") is not None:
+        rec["pct_gagnant_precedent"] = rec["pct_gagnant"]
+    if rec.get("marge_gagnante") is not None:
+        rec["marge_gagnante_precedente"] = rec["marge_gagnante"]
+    annee = rec.get("annee")
+    rec["annee_cible"] = int(annee) + 5 if annee is not None else None
     rec["libelle"] = rec.get("libelle") or code
+    rec["perimetre"] = "departement"
     return rec
 
 
+class PredictRequest(Features):
+    """Features what-if + horizon de prévision (sujet préfecture : 1–3 ans)."""
+    horizon_ans: int = 1
+
+
 @app.post("/predict")
-def predict(f: Features):
+def predict(f: PredictRequest):
     if not ml_service.is_ready():
         raise HTTPException(503, "Modele non entraine")
-    return {"probabilites": ml_service.predict_proba(f.dict())}
+    horizon = int(f.horizon_ans or 1)
+    if horizon not in (1, 2, 3):
+        raise HTTPException(400, "horizon_ans doit être 1, 2 ou 3")
+    payload = f.dict()
+    payload.pop("horizon_ans", None)
+    par_horizon, overs_by_h = ml_service.predict_proba_horizons(payload)
+    return {
+        "horizon_ans": horizon,
+        "probabilites": par_horizon[str(horizon)],
+        "probabilites_par_horizon": par_horizon,
+        "hors_enveloppe": overs_by_h.get(str(horizon), []),
+        "hors_enveloppe_par_horizon": overs_by_h,
+        "enveloppe_entrainement": ml_service.envelope(),
+        "methode": (
+            "extrapolation_tendances_socioeco + elargissement_incertitude_horizon"
+            " + clamp_enveloppe_entrainement"
+        ),
+    }

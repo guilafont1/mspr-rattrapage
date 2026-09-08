@@ -413,6 +413,13 @@ input.form-control {
   margin: 0 0 0.35rem;
 }
 
+.ea-horizon-picks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  margin: 0 0 0.15rem;
+}
+
 .ea-metric-pick {
   display: inline-flex !important;
   align-items: center;
@@ -447,7 +454,16 @@ input.form-control {
 
 .ea-whatif {
   max-width: 48rem;
-  padding: 1.1rem 0 0.35rem;
+  padding: 0.35rem 0 0.35rem;
+}
+
+.ea-whatif-metric {
+  padding: 0.85rem 0 0.55rem;
+  border-bottom: 1px solid var(--line);
+}
+
+.ea-whatif-metric:last-child {
+  border-bottom: 0;
 }
 
 .ea-whatif-head {
@@ -484,6 +500,69 @@ input.form-control {
   flex-wrap: wrap;
   gap: 0.5rem;
   margin-top: 1.1rem;
+}
+
+.ea-scenario-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+
+.ea-scenario-card {
+  appearance: none;
+  text-align: left;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.75);
+  color: var(--ink);
+  font-family: var(--font-ui);
+  padding: 0.9rem 1rem;
+  border-radius: 2px;
+  cursor: pointer;
+  transition: border-color 0.2s var(--ease), transform 0.2s var(--ease), background 0.2s var(--ease);
+}
+
+.ea-scenario-card:hover {
+  background: #fff;
+  border-color: var(--ink);
+  transform: translateY(-1px);
+}
+
+.ea-scenario-title {
+  display: block;
+  font-weight: 700;
+  font-size: 0.95rem;
+  margin-bottom: 0.35rem;
+  font-family: var(--font-brand);
+}
+
+.ea-scenario-blurb {
+  display: block;
+  font-size: 0.78rem;
+  line-height: 1.35;
+  color: var(--muted);
+  font-weight: 500;
+}
+
+.ea-scenario-crise { border-top: 3px solid #C8102E; }
+.ea-scenario-reprise { border-top: 3px solid #2A5F9E; }
+.ea-scenario-tension { border-top: 3px solid #C4922A; }
+
+.ea-scenario-badge {
+  font-size: 0.82rem;
+  color: var(--ink);
+  padding: 0.55rem 0.75rem;
+  border-left: 3px solid var(--ink);
+  background: rgba(11, 31, 51, 0.04);
+}
+
+.ea-scenario-badge.ea-scenario-crise { border-left-color: #C8102E; }
+.ea-scenario-badge.ea-scenario-reprise { border-left-color: #2A5F9E; }
+.ea-scenario-badge.ea-scenario-tension { border-left-color: #C4922A; }
+
+@media (max-width: 900px) {
+  .ea-scenario-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 .ea-chip {

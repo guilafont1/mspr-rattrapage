@@ -16,6 +16,7 @@ const FLUX_PNG = fs.existsSync(path.join(DIAG, 'flux_etl_medaillon.png'))
   ? path.join(DIAG, 'flux_etl_medaillon.png')
   : path.join(DIAG, 'flux_etl_mermaid_export.png');
 const SCALE_PNG = path.join(DIAG, 'scale_out.png');
+const ARCHI_PNG = path.join(DIAG, 'archi_techno_electio.png');
 
 function base(slide, num, title, subtitle) {
   slide.background = { color: 'FFFFFF' };
@@ -50,6 +51,7 @@ s = pres.addSlide(); base(s, 1, 'Plan de présentation');
 const plan = [
   'Contexte & périmètre',
   'Sources & référentiel',
+  'Architecture & stack techno',
   'Pipeline ETL (diagramme)',
   'Modèle de données',
   'Machine Learning',
@@ -60,8 +62,8 @@ const plan = [
   'Limites & améliorations',
 ];
 plan.forEach((t, i) => {
-  const col = i < 5 ? 0 : 1, r = i % 5;
-  const x = 0.7 + col * 6.3, y = 1.85 + r * 1.02;
+  const col = i < 6 ? 0 : 1, r = i < 6 ? i : i - 6;
+  const x = 0.7 + col * 6.3, y = 1.7 + r * 0.88;
   s.addShape('rect', { x, y, w: 0.55, h: 0.72, fill: { color: NAVY } });
   s.addText(String(i + 1), { x, y, w: 0.55, h: 0.72, color: 'FFFFFF', align: 'center', bold: true, margin: 0, valign: 'middle', fontSize: 16 });
   s.addShape('rect', { x: x + 0.55, y, w: 4.7, h: 0.72, fill: { color: GREY }, line: { color: NAVY, width: 1 } });
@@ -91,7 +93,17 @@ s.addText('Référentiel : etl/referentiels.py + docs/mspr/03_donnees/REFERENTIE
 s.addText('Pauvreté N−1 : 40 % de complétude GOLD (2017 & 2022, Filosofi historique) — hors features ML (fuite / couverture).', { x: 0.55, y: 5.7, w: 12.25, h: 0.45, fontSize: 13, color: DARK });
 s.addText('✓ Toutes les sources sous Licence Ouverte v2.0 · Aucune donnée personnelle · Agrégation départementale', { x: 0.55, y: 6.35, w: 12.25, h: 0.4, italic: true, fontSize: 12.5, color: NAVY, align: 'center' });
 
-// 5 Pipeline ETL — diagramme PNG
+// 5 Architecture & stack techno
+s = pres.addSlide();
+s.background = { color: 'FFFFFF' };
+if (fs.existsSync(ARCHI_PNG)) {
+  s.addImage({ path: ARCHI_PNG, x: 0, y: 0, w: 13.333, h: 7.5, sizing: { type: 'cover', w: 13.333, h: 7.5 } });
+} else {
+  base(s, 3, 'Architecture & stack technique', 'Schéma manquant');
+  card(s, 0.55, 1.8, 12.25, 4.8, 'PNG manquant', ['py docs/mspr/02_architecture/diagrams/gen_archi_techno.py'], RED);
+}
+
+// 6 Pipeline ETL — diagramme PNG
 s = pres.addSlide(); base(s, 3, 'Pipeline ETL — diagramme de flux', 'Architecture médailon RAW → Bronze → Silver → Gold');
 if (fs.existsSync(FLUX_PNG)) {
   s.addImage({ path: FLUX_PNG, x: 0.4, y: 1.55, w: 12.5, h: 5.3, sizing: { type: 'contain', w: 12.5, h: 5.3 } });
