@@ -562,8 +562,61 @@ def model_regression():
     return data
 
 
-# Même process : Dash monté sur / ; les callbacks appellent FastAPI in-process
-# (pas d'HTTP vers 127.0.0.1 — deadlock sur un seul worker uvicorn).
+def _inproc_get(path: str, params: dict):
+    """Appel direct des handlers FastAPI (pas de TestClient / httpx)."""
+    try:
+        if path == "/health":
+            return health()
+        if path == "/health/db":
+            return health_db()
+        if path == "/annees":
+            return annees()
+        if path == "/departements":
+            return departements()
+        if path == "/dashboard/overview":
+            return dashboard_overview()
+        if path == "/carte":
+            return carte(annee=int(params["annee"]))
+        if path == "/indicateurs":
+            annee = params.get("annee")
+            return indicateurs(
+                dept=params.get("dept"),
+                annee=int(annee) if annee is not None else None,
+            )
+        if path == "/resultats":
+            annee = params.get("annee")
+            return resultats(annee=int(annee) if annee is not None else None)
+        if path == "/predict/baseline":
+            return predict_baseline(dept=str(params.get("dept") or "FR"))
+        if path == "/model/info":
+            return model_info()
+        if path == "/model/importance":
+            return model_importance()
+        if path == "/model/comparison":
+            return model_comparison()
+        if path == "/model/confusion":
+            return model_confusion()
+        if path == "/model/regression":
+            return model_regression()
+    except HTTPException:
+        return None
+    return None
+
+
+def _inproc_post(path: str, payload: dict):
+    try:
+        if path == "/predict":
+            return 200, predict(PredictRequest(**(payload or {})))
+        if path == "/admin/reload":
+            return 200, admin_reload()
+    except HTTPException as exc:
+        return exc.status_code, {"detail": exc.detail}
+    except Exception as exc:
+        return 500, {"detail": str(exc)}
+    return 404, {"detail": "not found"}
+
+
+# Même process : Dash monté sur / ; callbacks → handlers Python (pas d'HTTP).
 if SERVE_DASH:
     if FRONT_DIR not in sys.path:
         sys.path.insert(0, FRONT_DIR)
@@ -571,4 +624,4 @@ if SERVE_DASH:
     from app import server as dash_server  # noqa: E402
 
     app.mount("/", WSGIMiddleware(dash_server))
-    dash_module.bind_asgi_app(app)
+    dash_module.bind_api_handlers(_inproc_get, _inproc_post)

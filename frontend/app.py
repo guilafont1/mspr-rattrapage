@@ -22,8 +22,9 @@ from dash import ALL, Input, Output, State, dcc, html, no_update
 # Config / thème
 # ---------------------------------------------------------------------------
 API = os.getenv("API_URL", "http://localhost:8000").rstrip("/")
-# Client in-process (Render : Dash monté sur FastAPI, pas d'auto-HTTP).
-_ASGI_CLIENT = None
+# Handlers in-process (Render : Dash monté sur FastAPI, pas d'auto-HTTP).
+_INPROC_GET = None
+_INPROC_POST = None
 ASSETS = Path(__file__).resolve().parent / "assets"
 GEOJSON_PATH = ASSETS / "departements.geojson"
 
@@ -95,20 +96,18 @@ def dept_dropdown_options(depts):
     return [{"label": f"{d} — {names.get(d, d)}", "value": d} for d in (depts or [])]
 
 
-def bind_asgi_app(asgi_app):
-    """Branche Dash sur l'app FastAPI (même process, sans HTTP localhost)."""
-    global _ASGI_CLIENT
-    from starlette.testclient import TestClient
-    _ASGI_CLIENT = TestClient(asgi_app, raise_server_exceptions=False)
+def bind_api_handlers(get_fn, post_fn):
+    """Branche Dash sur les handlers FastAPI (même process, sans httpx)."""
+    global _INPROC_GET, _INPROC_POST
+    _INPROC_GET, _INPROC_POST = get_fn, post_fn
 
 
 def api_get(path, **params):
     try:
         q = {k: v for k, v in params.items() if v is not None}
-        if _ASGI_CLIENT is not None:
-            r = _ASGI_CLIENT.get(path, params=q)
-        else:
-            r = requests.get(f"{API}{path}", params=q, timeout=20)
+        if _INPROC_GET is not None:
+            return _INPROC_GET(path, q)
+        r = requests.get(f"{API}{path}", params=q, timeout=20)
         if r.status_code >= 400:
             return None
         return r.json()
@@ -118,9 +117,8 @@ def api_get(path, **params):
 
 def api_post(path, payload):
     try:
-        if _ASGI_CLIENT is not None:
-            r = _ASGI_CLIENT.post(path, json=payload)
-            return r.status_code, r.json() if r.content else {}
+        if _INPROC_POST is not None:
+            return _INPROC_POST(path, payload)
         r = requests.post(f"{API}{path}", json=payload, timeout=20)
         return r.status_code, r.json()
     except Exception as e:
@@ -374,17 +372,15 @@ def boot(_):
 def _ping_db():
     """Retourne (ok: bool, payload: dict|None, error: str|None)."""
     try:
-        if _ASGI_CLIENT is not None:
-            r = _ASGI_CLIENT.get("/health/db")
-        else:
-            r = requests.get(f"{API}/health/db", timeout=8)
-        data = r.json() if r.content else {}
-        if r.status_code == 200 and data.get("database") == "up":
+        data = api_get("/health/db")
+        if data and data.get("database") == "up":
             return True, data, None
-        detail = data.get("detail", data)
-        if isinstance(detail, dict):
-            return False, detail, detail.get("error", "BDD indisponible")
-        return False, data, str(detail)
+        if isinstance(data, dict):
+            detail = data.get("detail", data)
+            if isinstance(detail, dict):
+                return False, detail, detail.get("error", "BDD indisponible")
+            return False, data, str(detail)
+        return False, data, "BDD indisponible"
     except Exception as e:
         return False, None, str(e)
 
