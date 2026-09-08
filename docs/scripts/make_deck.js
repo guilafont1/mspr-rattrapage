@@ -136,15 +136,15 @@ card(s, 8.85, 1.8, 3.95, 4.4, 'Gold (analytique)', ['gold_dataset_analytique', '
 s.addText('480 lignes GOLD · 384 observations ML · référentiel partagé ETL / SQL / Metabase', { x: 0.55, y: 6.4, w: 12.25, h: 0.4, italic: true, fontSize: 13, color: NAVY, align: 'center' });
 
 // 8 ML
-s = pres.addSlide(); base(s, 5, 'Machine Learning', 'Classification supervisée du bloc en tête');
-card(s, 0.55, 1.8, 5.95, 4.6, 'Protocole rigoureux', ['Split temporel : holdout = scrutin 2022', 'Sélection : 0,4×walk-forward + 0,6×holdout', 'CV GroupKFold = métrique secondaire', 'Features ≤ N−1 (anti-leakage ETL)'], NAVY);
-card(s, 6.7, 1.8, 6.1, 4.6, '5 modèles comparés', ['Baseline (classe majoritaire)', 'Régression logistique', 'Arbre de décision', 'Random Forest (fort en CV géo)', 'Gradient Boosting — retenu (temporel)'], BLUE);
+s = pres.addSlide(); base(s, 5, 'Machine Learning', 'Régression des écarts + scénario national');
+card(s, 0.55, 1.8, 5.95, 4.6, 'Protocole rigoureux', ['Split temporel : holdout = scrutin 2022', 'Sélection : walk-forward hors holdout uniquement', 'CV GroupKFold = métrique secondaire', 'Features ≤ N−1 (anti-leakage ETL)'], NAVY);
+card(s, 6.7, 1.8, 6.1, 4.6, '4 modèles comparés', ['Persistance de l’écart', 'Ridge écart par bloc', 'Ridge écart multi-sorties — retenu', 'Forêt écart multi-sorties'], BLUE);
 
 // 9 Résultats
-s = pres.addSlide(); base(s, 6, 'Résultats & accuracy', 'Gradient Boosting — holdout 2022 = 0,53 (données réelles)');
+s = pres.addSlide(); base(s, 6, 'Résultats & accuracy', 'Oracle 0,812 / tendance 0,448 — le modèle sait la carte, pas la vague');
 s.addImage({ path: path.join(VIZ, '6_model_compare.png'), x: 0.55, y: 1.8, w: 6.4, h: 3.6 });
 s.addImage({ path: path.join(VIZ, '5_confusion.png'), x: 1.6, y: 5.5, w: 4.3, h: 1.5, sizing: { type: 'contain', w: 4.3, h: 1.5 } });
-card(s, 7.2, 1.8, 5.6, 5.2, 'Chiffres figés (CHIFFRES_FIGES.md)', ['Holdout 2022 : 0,53 (> 0,5)', 'Walk-forward : 0,37', 'CV géo secondaire : 0,72', 'Baseline CV : 0,41', 'Top feature : pct gagnant précédent', 'Pauvreté : 40 % GOLD, hors ML', 'Source : data/ml_report.json'], GOLD);
+card(s, 7.2, 1.8, 5.6, 5.2, 'Chiffres figés (CHIFFRES_FIGES.md)', ['Oracle MAE : 1,394', 'Oracle argmax : 0,812', 'Tendance argmax : 0,448', 'Persist. écart oracle : 0,844', 'Gagnant précédent : 0,521', 'Socio-éco : 12,8 % importance', 'Source : data/ml_report.json'], GOLD);
 
 // 10 DQM + Metabase
 s = pres.addSlide(); base(s, 7, 'Qualité DQM & restitution Metabase', 'Suite DQM interne + BI jury');

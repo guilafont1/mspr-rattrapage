@@ -48,6 +48,21 @@ UA = {"User-Agent": "ElectioAnalytics-POC/1.0 (MSPR TPRE813; educational)"}
 ELECTIONS = [2002, 2007, 2012, 2017, 2022]
 METRO_DEPTS = list(REF_METRO)
 
+
+def _excel_engine() -> str:
+    """Moteur Excel : calamine lit .xls et .xlsx (xlrd>=2 ne lit plus le .xls)."""
+    return "calamine"
+
+
+def _open_excel(path, **kwargs) -> pd.ExcelFile:
+    return pd.ExcelFile(path, engine=_excel_engine(), **kwargs)
+
+
+def _read_excel(path_or_book, **kwargs) -> pd.DataFrame:
+    if not isinstance(path_or_book, pd.ExcelFile):
+        kwargs.setdefault("engine", _excel_engine())
+    return pd.read_excel(path_or_book, **kwargs)
+
 # Pages catalogue (stables) — les URL de fichier sont resolues dynamiquement
 CATALOGUES = {
     "elections": "https://www.data.gouv.fr/fr/pages/donnees-des-elections/",
@@ -483,7 +498,7 @@ def _find_sheet(path: str, wanted: str | None):
     """Retourne le nom de feuille (tolerante aux accents) ou 0."""
     if wanted is None:
         return 0
-    xl = pd.ExcelFile(path)
+    xl = _open_excel(path)
     if wanted in xl.sheet_names:
         return wanted
     want = wanted.lower().encode("ascii", "ignore").decode()
@@ -500,7 +515,7 @@ def _find_sheet(path: str, wanted: str | None):
 
 def parse_election_file(path: str, annee: int, sheet, header_row: int) -> pd.DataFrame:
     sheet_name = _find_sheet(path, sheet)
-    df = pd.read_excel(path, sheet_name=sheet_name, header=None)
+    df = _read_excel(path, sheet_name=sheet_name, header=None)
     col_ins, pairs = _candidate_blocks(df, header_row)
     data = df.iloc[header_row + 1 :].copy()
     rows = []
@@ -659,7 +674,7 @@ def build_chomage() -> pd.DataFrame:
         dest = os.path.join(RAW, "chomage", os.path.basename(urllib.parse.urlparse(url).path))
         download(url, dest)
     sheet = _find_sheet(dest, "Département")
-    raw = pd.read_excel(dest, sheet_name=sheet, header=None)
+    raw = _read_excel(dest, sheet_name=sheet, header=None)
     out = _melt_trim_wide(raw, "taux_chomage")
     # Bornes plausibles : on droppe les hors [0;30] (qualite amont)
     before = len(out)
@@ -687,7 +702,7 @@ def build_emploi() -> pd.DataFrame:
         dest = os.path.join(RAW, "emploi", os.path.basename(urllib.parse.urlparse(url).path))
         download(url, dest)
     sheet = _find_sheet(dest, "Département")
-    raw = pd.read_excel(dest, sheet_name=sheet, header=None)
+    raw = _read_excel(dest, sheet_name=sheet, header=None)
     # Fichier en milliers d'emplois -> unites
     out = _melt_trim_wide(raw, "emploi_total", scale=1000.0)
     out = out[out["emploi_total"] > 0]
@@ -722,14 +737,14 @@ def build_population() -> pd.DataFrame:
         )
         download(url, dest)
 
-    xl = pd.ExcelFile(dest)
+    xl = _open_excel(dest)
     rows = []
     for sheet in xl.sheet_names:
         # Feuilles numeriques = annees (ignorer 'A savoir', etc.)
         if not re.fullmatch(r"\d{4}", str(sheet).strip()):
             continue
         annee = int(str(sheet).strip())
-        raw = pd.read_excel(xl, sheet_name=sheet, header=None)
+        raw = _read_excel(xl, sheet_name=sheet, header=None)
         # Ligne de donnees : col0=code, col7=Total (apres en-tetes)
         for _, r in raw.iterrows():
             code = norm_code_dept(r.iloc[0])
@@ -816,7 +831,7 @@ def _filosofi_from_zip(zip_path: str, annee: int) -> pd.DataFrame:
                 f"Filosofi {annee}: aucun DEP/CSV/XLS dans {os.path.basename(zip_path)}"
             )
         raw = z.read(xls[0])
-        xl = pd.ExcelFile(io.BytesIO(raw))
+        xl = _open_excel(io.BytesIO(raw))
         sheet = next(
             (s for s in xl.sheet_names if re.search(r"^DEP$", s, re.I)),
             next(
@@ -825,19 +840,19 @@ def _filosofi_from_zip(zip_path: str, annee: int) -> pd.DataFrame:
             ),
         )
         # Fichiers Filosofi XLS : en-tetes souvent a la ligne 5/6
-        preview = pd.read_excel(xl, sheet_name=sheet, header=None, nrows=12, dtype=str)
+        preview = _read_excel(xl, sheet_name=sheet, header=None, nrows=12, dtype=str)
         header_row = 0
         for i, row in preview.iterrows():
             vals = " ".join(str(v) for v in row.values if pd.notna(v))
             if re.search(r"CODGEO|TP60", vals, re.I):
                 header_row = int(i)
                 break
-        df = pd.read_excel(xl, sheet_name=sheet, header=header_row, dtype=str)
+        df = _read_excel(xl, sheet_name=sheet, header=header_row, dtype=str)
         return _parse_filosofi_dep_frame(df, annee)
 
 
 def _filosofi_from_xls(path: str, annee: int) -> pd.DataFrame:
-    xl = pd.ExcelFile(path)
+    xl = _open_excel(path)
     # Preferer feuille DEP / departement
     sheet = None
     for s in xl.sheet_names:
@@ -846,7 +861,7 @@ def _filosofi_from_xls(path: str, annee: int) -> pd.DataFrame:
             break
     if sheet is None:
         sheet = xl.sheet_names[0]
-    df = pd.read_excel(path, sheet_name=sheet, dtype=str)
+    df = _read_excel(path, sheet_name=sheet, dtype=str)
     return _parse_filosofi_dep_frame(df, annee)
 
 
@@ -1070,8 +1085,10 @@ def write_bronze_manifest(written: dict[str, int]) -> None:
     from datetime import datetime, timezone
     payload = {
         "layer": "BRONZE",
+        "mode": "real",
         "role": "Contrat normalise (sources RAW immuables dans data/raw/)",
         "generated_at": datetime.now(timezone.utc).isoformat(),
+        "catalogues": CATALOGUES,
         "schemas": BRONZE_SCHEMAS,
         "tables": {
             name: {"rows": n, "columns": BRONZE_SCHEMAS.get(name, [])}

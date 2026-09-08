@@ -71,8 +71,47 @@ def test_features_anterieures(gold):
 
 def test_gold_features_enrichies(gold):
     for col in ("delta_chomage_1a", "croissance_pop_5a_pct",
-                "pct_gagnant_precedent", "marge_gagnante_precedente"):
+                "pct_gagnant_precedent", "marge_gagnante_precedente",
+                "pct_EXG", "pct_EXD", "pct_EXG_prec", "delta_recent_CEN",
+                "volatility_DRO"):
         assert col in gold.columns, f"Feature Gold absente : {col}"
+
+
+def test_gold_scores_somment_100(gold):
+    pct = [f"pct_{b}" for b in ("EXG", "GAU", "CEN", "DRO", "EXD")]
+    s = gold[pct].sum(axis=1)
+    assert s.between(95, 105).all(), "Somme des pct_* hors [95;105]"
+
+
+def test_gold_prec_anti_leakage(gold):
+    """pct_*_prec ne doit jamais egaler le score courant (sauf coincidence rare)."""
+    g = gold.dropna(subset=["pct_EXG_prec"]).copy()
+    g = g.sort_values(["code_dept", "annee"])
+    shifted = g.groupby("code_dept")["pct_EXG"].shift(1)
+    both = g["pct_EXG_prec"].notna() & shifted.notna()
+    assert (g.loc[both, "pct_EXG_prec"] - shifted[both]).abs().max() < 0.06
+
+
+def test_gold_decomposition_nationale(gold):
+    for col in ("inscrits", "pct_EXG_national", "ecart_DRO", "ecart_EXD_prec",
+                "delta_recent_ecart_CEN", "trend_ecart_GAU"):
+        assert col in gold.columns, f"Colonne GOLD absente : {col}"
+    nat = [f"pct_{b}_national" for b in ("EXG", "GAU", "CEN", "DRO", "EXD")]
+    assert gold[nat].sum(axis=1).between(95, 105).all()
+    # Moyenne ponderee des ecarts ~ 0
+    for an, g in gold.groupby("annee"):
+        w = g["inscrits"].astype(float)
+        sw = float(w.sum())
+        for b in ("EXG", "GAU", "CEN", "DRO", "EXD"):
+            wm = float((g[f"ecart_{b}"] * w).sum() / sw)
+            assert abs(wm) <= 0.15, f"{an}/{b} moyenne ponderee = {wm}"
+
+
+def test_gold_ecart_prec_anti_leakage(gold):
+    g = gold.dropna(subset=["ecart_EXG_prec"]).sort_values(["code_dept", "annee"])
+    shifted = g.groupby("code_dept")["ecart_EXG"].shift(1)
+    both = g["ecart_EXG_prec"].notna() & shifted.notna()
+    assert (g.loc[both, "ecart_EXG_prec"] - shifted[both]).abs().max() < 0.0006
 
 
 def test_gold_kpi_artefacts():

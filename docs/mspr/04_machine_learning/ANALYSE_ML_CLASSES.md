@@ -1,32 +1,49 @@
-# Analyse ML par classe — holdout 2022 (compétence C4)
+# Analyse ML — écarts départementaux (données réelles)
 
-## Pauvreté (Filosofi) — décision modèle
-- **Branchée** en Bronze/Silver/Gold : millésimes 2016, 2017, 2019, 2021 + Melodi 2023.
-- Complétude `taux_pauvrete_n1` : **40 %** (scrutins 2017 et 2022 uniquement ; N−1 absents avant).
-- **Exclue du modèle supervisé** : la feature dégrade le holdout walk-forward ; conservée pour la BI / KPI.
-- Preuve : `data/quality_report.txt` + `kpi_completude_features.csv` + `docs/mspr/04_machine_learning/ANALYSE_ML_CLASSES.md`.
+## Tâche
+Prédire l'écart de chaque département au niveau national (`ecart_B`), puis
+reconstruire `pct_B = national_B + ecart_B` (clip [0;100], somme 100).
+Le bloc en tête est l'argmax. Le niveau national est un **scénario**, pas une
+sortie du modèle.
 
-## Contexte
-Cible : `bloc_gagnant` (5 modalités). Protocole : walk-forward + holdout dernier scrutin.
-Modèle retenu : **Gradient Boosting** (score 0,4×WF + 0,6×holdout).
+## Diagnostic préalable (Ridge par bloc sur les niveaux)
+`ridge_par_bloc` (MAE 14,38) n'était pas un bug : imputation 2007 OK ; α=10
+choisi par l'argmax de sélection, pas par le MAE ; même α=1000 reste au-dessus
+de la persistance (7,23). Le Ridge extrapolait `trend_*` / `delta_long_*`,
+c'est-à-dire le choc national. Non retuné. Conservé dans `ml_report.json`.
 
-## Pourquoi 2022 est difficile
-| Bloc | Train 2007–2017 | Test 2022 | Lecture |
-|---|---|---|---|
-| GAU / DRO | Dominants historiquement | Faibles / absents | Stickiness politique trompe RF |
-| EXD | Rare hors 2017 | **Majoritaire** (~54 % des dépts) | Recomposition nationale |
-| CEN | Faible | Fort (~31 %) | Offre macroniste non vue avant 2017 |
+## Features
+- **Écart** (anti-leakage, scrutins < N) : `ecart_{B}_prec`, `delta_recent_ecart`,
+  `delta_long_ecart`, `trend_ecart`, `volatility_ecart`.
+- **Socio-éco INSEE** (N−1) : chômage, emploi, population.
+- `creations_entreprises_n1` et `taux_pauvrete_n1` : exclus (couverture trop courte).
 
-Le **Random Forest** maximise la CV géographique en recopiant les blocs passés → holdout ~0,05.  
-Le **Gradient Boosting** capture mieux les interactions socio-éco + lags → holdout **≈ 0,53** (> 0,5).
+## Décision scrutins
+Option B : exiger ≥ 1 prior (`ecart_*_prec`) → 384 obs., 2 plis de sélection
+(2012, 2017). Option A (2 priors) n'aurait laissé qu'un pli.
 
-## Pourquoi le F1 macro est plus bas que l’accuracy
-- Classes **déséquilibrées** en 2022 (EXD/CEN vs GAU).
-- Support **DRO = 0** sur le holdout → contribution nulle / instable au macro.
-- L’accuracy récompense le bon classement du bloc majoritaire (EXD) ; le F1 macro pénalise les classes rares.
+## Régime A — national 2022 connu (oracle)
+| Référence | MAE scores | Acc. argmax |
+|---|---|---|
+| **ridge_ecart_multisorties** (retenu) | **1,394** | **0,812** |
+| Persistance de l'écart | 1,527 | 0,844 |
+| Persistance du niveau (pct_2017) | 7,225 | 0,521 |
+| Classe majoritaire EXD | — | 0,542 |
 
-## Tuning léger (walk-forward)
-Grille explorée dans `ml/train.py` (sous-ensemble GB) : `n_estimators ∈ {150,200}`, `max_depth ∈ {2,3}`, `learning_rate ∈ {0.05,0.1}` — sélection toujours par le **même score temporel** (pas de peeking géo seul).
+Le modèle **bat** la persistance en MAE (−0,133). Il ne la bat pas en argmax.
+Non retuné. R² d'EXG / DRO très négatifs : σ inter-départements DRO = 1,16 pt
+contre un choc national de −17,8 pts — ne pas citer le R² (`metrique_principale`: MAE).
+
+## Régime B — national projeté (tendance)
+Tendance linéaire : dernier niveau + (dernier−premier)/span × Δannées, puis
+renormalisation. Acc. **0,448**, MAE **6,899** — le choc DRO n'est pas dans
+l'extrapolation. Résultat prospectif à assumer.
+
+## Poids socio-éco
+**12,8 %** de l'importance (coefficients Ridge |moyen|) vs **87,2 %** pour les
+dérivées d'écart. Les curseurs INSEE restent, avec un levier réel mais secondaire.
 
 ## Phrase orale
-« Le seuil CDC est tenu en holdout temporel avec le Gradient Boosting. Le F1 macro plus bas est attendu : 2022 n’a plus de DRO en tête et concentre EXD/CEN. Ce n’est pas un bug pipeline, c’est la limite d’un modèle socio-économique face à une recomposition politique. »
+« Le modèle sait la carte, pas la vague. Avec le niveau national 2022 connu,
+on est à 1,4 pt de MAE et 81 % d'argmax. Sans ce niveau, seulement 45 % :
+c'est l'hypothèse nationale de l'utilisateur qui porte le choc, pas l'INSEE. »

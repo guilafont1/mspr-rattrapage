@@ -44,7 +44,7 @@ const children = [
 
   H1('Résumé exécutif'),
   P('Electio-Analytics souhaite valider, par une preuve de concept, sa capacité à anticiper les tendances électorales à 1–3 ans à partir d\u2019indicateurs socio-économiques publics. Ce POC met en place une chaîne complète et reproductible : collecte de données ouvertes, pipeline ETL en architecture médailon, entrepôt structuré, modèle prédictif supervisé et restitutions visuelles (Dash, API FastAPI, Metabase).'),
-  P('Périmètre : les 96 départements de France métropolitaine sur 5 scrutins présidentiels (2002–2022) → 480 lignes GOLD. Après lag politique, le jeu ML compte 384 observations. Le modèle retenu (Gradient Boosting, sélection walk-forward temporelle) atteint une accuracy de 0,53 sur le holdout 2022 — au-dessus du seuil de 0,5 exigé. Walk-forward : 0,37 ; CV géographique secondaire : 0,72 ; baseline CV : 0,41. Chiffres figés le 30/07/2026 dans docs/mspr/04_machine_learning/CHIFFRES_FIGES.md (source data/ml_report.json).'),
+  P('Périmètre : les 96 départements de France métropolitaine sur 5 scrutins présidentiels (2002–2022) → 480 lignes GOLD. Après lag d’écart, le jeu ML compte 384 observations (données réelles). Tâche : régression des écarts départementaux au national, puis reconstruction du score. Modèle retenu (ridge_ecart_multisorties, α=10, sélection walk-forward hors holdout sur 2012 et 2017). Régime A (national 2022 connu) : MAE 1,394 et argmax 0,812. Régime B (national projeté) : MAE 6,899 et argmax 0,448. Le modèle sait la géographie, pas la vague nationale. Chiffres figés le 08/09/2026 dans docs/mspr/04_machine_learning/CHIFFRES_FIGES.md (source data/ml_report.json).'),
   P('Le taux de pauvreté N−1 a une complétude de 40 % en GOLD (millésimes Filosofi 2017 et 2022) : il reste disponible pour la BI et le référentiel, mais est exclu des features ML pour éviter une couverture partielle biaisante. Un référentiel de données, une suite DQM exécutable (inspirée du pattern expectations) et un guide Metabase complètent le dossier.'),
 
   new Paragraph({ children: [new PageBreak()] }),
@@ -109,16 +109,15 @@ children.push(
   new Paragraph({ children: [new PageBreak()] }),
 
   H1('5. Modèles testés et résultats (chiffres figés)'),
-  P('Cinq approches comparées. Critère de sélection : robustesse temporelle (walk-forward + holdout), pas la seule CV géographique.'),
-  table(['Modèle', 'Accuracy CV géo', 'Walk-forward', 'Holdout 2022'], [
-    ['Baseline (classe majoritaire)', '0,41', '0,16', '0,15'],
-    ['Régression logistique', '—', '0,25', '0,10'],
-    ['Arbre de décision', '—', '—', '—'],
-    ['Random Forest', '0,69', '—', '~0,05'],
-    ['Gradient Boosting (retenu)', '0,72', '0,37', '0,53'],
-  ], [3600, 1800, 1800, 1800]),
+  P('Tâche : régression des écarts départementaux, reconstruction score = national + écart. Sélection walk-forward hors holdout (plis 2012 et 2017). Métrique principale : MAE. Source : data/ml_report.json.'),
+  table(['Modèle', 'MAE écart sel.', 'Acc. oracle 2022', 'Acc. projeté 2022'], [
+    ['Persistance de l’écart', '1,262', '0,844', '0,542'],
+    ['Ridge écart par bloc', '1,745', '0,781', '0,385'],
+    ['Ridge écart multi-sorties (retenu)', '1,538', '0,812', '0,448'],
+    ['Forêt écart multi-sorties', '1,560', '0,875', '0,562'],
+  ], [4200, 1800, 1800, 1800]),
   P(''),
-  P('Le Gradient Boosting (n=200, depth=3, lr=0,1) est retenu : holdout 2022 = 0,53 (> 0,5). Le Random Forest reste fort en CV géo (~0,69) mais échoue sur la recomposition 2022 ; d\u2019où le critère temporel. Top features : pct_gagnant_precedent, delta_chomage_5a, marge_gagnante_precedente. Pauvreté N−1 : 40 % en GOLD, hors ML.'),
+  P('Régime A (national 2022 connu) : MAE scores 1,394, argmax 0,812. Régime B (tendance nationale) : MAE 6,899, argmax 0,448. Le modèle sait la géographie, pas la vague. Poids socio-éco INSEE : 12,8 %. R² non citable (σ DRO = 1,16 pt vs choc −17,8 pts).'),
   IMG_VIZ('6_model_compare.png', 460, 259), CAP('Fig. 1 — Comparaison des modèles.'),
   IMG_VIZ('5_confusion.png', 360, 300), CAP('Fig. 2 — Matrice de confusion (holdout 2022).'),
   IMG_VIZ('7_importance.png', 460, 276), CAP('Fig. 3 — Importance des variables.'),

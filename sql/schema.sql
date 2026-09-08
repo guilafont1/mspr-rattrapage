@@ -40,8 +40,15 @@ CREATE TABLE IF NOT EXISTS dim_bloc (
 );
 
 -- Les tables de faits et la table gold sont (re)creees par pandas.to_sql
--- dans 02_transform.py ; ce fichier documente le schema cible et cree les
--- dimensions de reference + des index utiles aux requetes analytiques.
+-- dans 02_transform.py. Schema cible GOLD (regression multi-sorties) :
+--   cibles : pct_EXG..pct_EXD et ecart_EXG..ecart_EXD
+--   niveau national : pct_{B}_national (pondere par inscrits)
+--   features electorales anti-leakage : pct_{B}_prec, delta_recent_{B},
+--     delta_long_{B}, trend_{B}, volatility_{B}
+--   features d'ecart anti-leakage : ecart_{B}_prec, delta_recent_ecart_{B},
+--     delta_long_ecart_{B}, trend_ecart_{B}, volatility_ecart_{B}
+--   + features socio-eco N-1 et lags politiques existants.
+-- Voir aussi db/init.sql (PostgreSQL).
 
 -- Index conseilles (crees apres chargement dans 02_transform.py) :
 --   CREATE INDEX idx_gold_dept ON gold_dataset_analytique(code_dept);

@@ -264,20 +264,132 @@ class Features(BaseModel):
     pct_gagnant_precedent: float | None = None
     marge_gagnante_precedente: float | None = None
     bloc_gagnant_precedent: str | None = None
+    # Features electorales (lags)
+    pct_EXG_prec: float | None = None
+    pct_GAU_prec: float | None = None
+    pct_CEN_prec: float | None = None
+    pct_DRO_prec: float | None = None
+    pct_EXD_prec: float | None = None
+    delta_recent_EXG: float | None = None
+    delta_recent_GAU: float | None = None
+    delta_recent_CEN: float | None = None
+    delta_recent_DRO: float | None = None
+    delta_recent_EXD: float | None = None
+    delta_long_EXG: float | None = None
+    delta_long_GAU: float | None = None
+    delta_long_CEN: float | None = None
+    delta_long_DRO: float | None = None
+    delta_long_EXD: float | None = None
+    trend_EXG: float | None = None
+    trend_GAU: float | None = None
+    trend_CEN: float | None = None
+    trend_DRO: float | None = None
+    trend_EXD: float | None = None
+    volatility_EXG: float | None = None
+    volatility_GAU: float | None = None
+    volatility_CEN: float | None = None
+    volatility_DRO: float | None = None
+    volatility_EXD: float | None = None
+    # Derivees de l'ecart departemental
+    ecart_EXG_prec: float | None = None
+    ecart_GAU_prec: float | None = None
+    ecart_CEN_prec: float | None = None
+    ecart_DRO_prec: float | None = None
+    ecart_EXD_prec: float | None = None
+    delta_recent_ecart_EXG: float | None = None
+    delta_recent_ecart_GAU: float | None = None
+    delta_recent_ecart_CEN: float | None = None
+    delta_recent_ecart_DRO: float | None = None
+    delta_recent_ecart_EXD: float | None = None
+    delta_long_ecart_EXG: float | None = None
+    delta_long_ecart_GAU: float | None = None
+    delta_long_ecart_CEN: float | None = None
+    delta_long_ecart_DRO: float | None = None
+    delta_long_ecart_EXD: float | None = None
+    trend_ecart_EXG: float | None = None
+    trend_ecart_GAU: float | None = None
+    trend_ecart_CEN: float | None = None
+    trend_ecart_DRO: float | None = None
+    trend_ecart_EXD: float | None = None
+    volatility_ecart_EXG: float | None = None
+    volatility_ecart_GAU: float | None = None
+    volatility_ecart_CEN: float | None = None
+    volatility_ecart_DRO: float | None = None
+    volatility_ecart_EXD: float | None = None
+
+
+def _lag_from_series(series: pd.Series, years: pd.Series, ndigits: int = 4) -> dict:
+    """Derivees anti-leakage a partir d'une serie deja triee chronologiquement.
+
+    Pour un usage prospectif : le dernier point observe devient le « precedent ».
+    """
+    s = pd.to_numeric(series, errors="coerce")
+    y = pd.to_numeric(years, errors="coerce")
+    mask = s.notna() & y.notna()
+    s, y = s[mask], y[mask]
+    out = {}
+    if len(s) == 0:
+        return out
+    last = float(s.iloc[-1])
+    out["prec"] = round(last, ndigits)
+    if len(s) >= 2:
+        out["delta_recent"] = round(last - float(s.iloc[-2]), ndigits)
+        out["volatility"] = round(float(s.std(ddof=1)), 4)
+    first = float(s.iloc[0])
+    out["delta_long"] = round(last - first, ndigits)
+    span = int(y.iloc[-1]) - int(y.iloc[0])
+    out["trend"] = round((last - first) / span, 4) if span > 0 else None
+    return out
+
+
+def _electoral_lags_from_history(df_hist: pd.DataFrame) -> dict:
+    """Derive pct_{B}_prec, ecart_{B}_prec et trajectoires (anti-leakage)."""
+    blocs = ["EXG", "GAU", "CEN", "DRO", "EXD"]
+    hist = df_hist.sort_values("annee")
+    out = {}
+    if hist.empty:
+        return out
+    for b in blocs:
+        if f"pct_{b}" in hist.columns:
+            lag = _lag_from_series(hist[f"pct_{b}"], hist["annee"], ndigits=3)
+            if "prec" in lag:
+                out[f"pct_{b}_prec"] = lag["prec"]
+            if "delta_recent" in lag:
+                out[f"delta_recent_{b}"] = lag["delta_recent"]
+            if "delta_long" in lag:
+                out[f"delta_long_{b}"] = lag["delta_long"]
+            if "trend" in lag:
+                out[f"trend_{b}"] = lag["trend"]
+            if "volatility" in lag:
+                out[f"volatility_{b}"] = lag["volatility"]
+        col_e = f"ecart_{b}"
+        if col_e not in hist.columns and f"pct_{b}" in hist.columns and f"pct_{b}_national" in hist.columns:
+            hist = hist.copy()
+            hist[col_e] = (
+                pd.to_numeric(hist[f"pct_{b}"], errors="coerce")
+                - pd.to_numeric(hist[f"pct_{b}_national"], errors="coerce")
+            )
+        if col_e in hist.columns:
+            lag = _lag_from_series(hist[col_e], hist["annee"], ndigits=4)
+            if "prec" in lag:
+                out[f"ecart_{b}_prec"] = lag["prec"]
+            if "delta_recent" in lag:
+                out[f"delta_recent_ecart_{b}"] = lag["delta_recent"]
+            if "delta_long" in lag:
+                out[f"delta_long_ecart_{b}"] = lag["delta_long"]
+            if "trend" in lag:
+                out[f"trend_ecart_{b}"] = lag["trend"]
+            if "volatility" in lag:
+                out[f"volatility_ecart_{b}"] = lag["volatility"]
+    return out
 
 
 @app.get("/predict/baseline")
 def predict_baseline(dept: str = Query("FR", min_length=1, max_length=10)):
     """Baseline what-if : France (agrégat national) ou un département.
 
-    Usage prospectif : la dernière ligne GOLD (ex. 2022) sert de point de départ,
-    mais les lags politiques sont décalés — bloc / pct / marge « précédent »
-    deviennent ceux observés sur ce dernier scrutin, pour prédire le suivant
-    (annee_cible = annee + 5).
-
-    - dept=FR (défaut) : moyennes nationales sur le dernier scrutin GOLD
-      (bloc = mode / majorité des départements).
-    - sinon : dernière observation GOLD du département.
+    Usage prospectif : lags = résultats du dernier scrutin (annee_cible = annee+5),
+    y compris pct_{B}_prec et dérivées électorales.
     """
     code = dept.strip().upper()
     if code in ("FR", "FRANCE", "NAT", "NATIONAL"):
@@ -286,21 +398,29 @@ def predict_baseline(dept: str = Query("FR", min_length=1, max_length=10)):
         if ydf.empty or pd.isna(ydf.iloc[0]["annee"]):
             raise HTTPException(404, "Aucun historique GOLD")
         annee = int(ydf.iloc[0]["annee"])
-        q = text("""
-            SELECT *
-            FROM gold_dataset_analytique
-            WHERE annee = :annee
-        """)
-        df = pd.read_sql(q, engine, params={"annee": annee})
+        q = text("SELECT * FROM gold_dataset_analytique WHERE annee = :annee")
+        df = load_data.canonicalize_gold_df(
+            pd.read_sql(q, engine, params={"annee": annee})
+        )
         if df.empty:
             raise HTTPException(404, f"Aucune donnée GOLD pour {annee}")
+
+        # Historique national moyen par année (pour dérivées électorales)
+        q_all = text("SELECT * FROM gold_dataset_analytique")
+        all_df = load_data.canonicalize_gold_df(pd.read_sql(q_all, engine))
+        nat = (
+            all_df.groupby("annee", as_index=False)[
+                [c for c in all_df.columns
+                 if c.startswith("pct_") or c.startswith("ecart_")]
+            ].mean(numeric_only=True)
+        )
 
         num_cols = [
             "taux_chomage_n1", "delta_chomage_1a", "delta_chomage_5a",
             "emploi_pour_1000hab", "croissance_emploi_5a_pct", "croissance_pop_5a_pct",
             "taux_pauvrete_n1", "creations_entreprises_n1",
             "pct_gagnant", "marge_gagnante",
-            "pct_gagnant_precedent", "marge_gagnante_precedente",
+            "pct_EXG", "pct_GAU", "pct_CEN", "pct_DRO", "pct_EXD",
         ]
         rec = {"annee": annee, "code_dept": "FR", "libelle": "France"}
         for col in num_cols:
@@ -308,24 +428,22 @@ def predict_baseline(dept: str = Query("FR", min_length=1, max_length=10)):
                 val = pd.to_numeric(df[col], errors="coerce").mean()
                 rec[col] = None if pd.isna(val) else round(float(val), 3)
 
-        # Bloc majoritaire (mode) au niveau France
-        for col in ("bloc_gagnant", "bloc_gagnant_precedent"):
-            if col in df.columns and df[col].notna().any():
-                rec[col] = str(df[col].mode().iloc[0])
-            else:
-                rec[col] = None
-
-        # Ancrage prospectif : le gagnant 2022 devient le « précédent » pour 2027
-        if rec.get("bloc_gagnant") is not None:
-            rec["bloc_gagnant_precedent"] = rec["bloc_gagnant"]
+        if "bloc_gagnant" in df.columns and df["bloc_gagnant"].notna().any():
+            rec["bloc_gagnant"] = str(df["bloc_gagnant"].mode().iloc[0])
+        else:
+            rec["bloc_gagnant"] = None
+        rec["bloc_gagnant_precedent"] = rec.get("bloc_gagnant")
         if rec.get("pct_gagnant") is not None:
             rec["pct_gagnant_precedent"] = rec["pct_gagnant"]
         if rec.get("marge_gagnante") is not None:
             rec["marge_gagnante_precedente"] = rec["marge_gagnante"]
 
+        rec.update(_electoral_lags_from_history(nat))
         rec["annee_cible"] = annee + 5
         rec["n_departements"] = int(len(df))
         rec["perimetre"] = "france"
+        rec["niveaux_nationaux_tendance"] = ml_service.tendance_nationale(annee + 5)
+        rec["scenario_national_defaut"] = "tendance"
         return rec
 
     q = text("""
@@ -333,30 +451,38 @@ def predict_baseline(dept: str = Query("FR", min_length=1, max_length=10)):
         FROM gold_dataset_analytique g
         LEFT JOIN dim_departement d ON d.code_dept = g.code_dept
         WHERE g.code_dept = :dept
-        ORDER BY g.annee DESC
-        LIMIT 1
+        ORDER BY g.annee
     """)
-    df = pd.read_sql(q, engine, params={"dept": code})
+    df = load_data.canonicalize_gold_df(
+        pd.read_sql(q, engine, params={"dept": code})
+    )
     if df.empty:
         raise HTTPException(404, f"Aucun historique GOLD pour le département {code}")
-    rec = _records(df)[0]
-    # Ancrage prospectif : lags = résultats du dernier scrutin observé
+    last = df.iloc[-1]
+    rec = _records(df.tail(1))[0]
     if rec.get("bloc_gagnant") is not None:
         rec["bloc_gagnant_precedent"] = rec["bloc_gagnant"]
     if rec.get("pct_gagnant") is not None:
         rec["pct_gagnant_precedent"] = rec["pct_gagnant"]
     if rec.get("marge_gagnante") is not None:
         rec["marge_gagnante_precedente"] = rec["marge_gagnante"]
+    rec.update(_electoral_lags_from_history(df))
     annee = rec.get("annee")
     rec["annee_cible"] = int(annee) + 5 if annee is not None else None
     rec["libelle"] = rec.get("libelle") or code
     rec["perimetre"] = "departement"
+    cible = rec["annee_cible"] or 2027
+    rec["niveaux_nationaux_tendance"] = ml_service.tendance_nationale(cible)
+    rec["scenario_national_defaut"] = "tendance"
     return rec
 
 
 class PredictRequest(Features):
-    """Features what-if + horizon de prévision (sujet préfecture : 1–3 ans)."""
+    """Features what-if + horizon (année = dernier scrutin + h)."""
     horizon_ans: int = 1
+    scenario_national: str | None = "tendance"
+    niveaux_nationaux: dict | None = None
+    annee_cible: int | None = None
 
 
 @app.post("/predict")
@@ -366,18 +492,57 @@ def predict(f: PredictRequest):
     horizon = int(f.horizon_ans or 1)
     if horizon not in (1, 2, 3):
         raise HTTPException(400, "horizon_ans doit être 1, 2 ou 3")
-    payload = f.dict()
+    payload = f.model_dump() if hasattr(f, "model_dump") else f.dict()
     payload.pop("horizon_ans", None)
-    par_horizon, overs_by_h = ml_service.predict_proba_horizons(payload)
+    scenario = payload.pop("scenario_national", "tendance")
+    niveaux = payload.pop("niveaux_nationaux", None)
+    annee_cible = payload.pop("annee_cible", None)
+    try:
+        scores_h, overs_by_h, blocs_h, ecarts_h, nat_h, annees_h, regime = (
+            ml_service.predict_proba_horizons(
+                payload,
+                scenario_national=scenario,
+                niveaux_nationaux=niveaux,
+                annee_cible=annee_cible,
+            )
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    key = str(horizon)
+    scores = scores_h[key]
+    proba_h = {
+        h: {b: round(v / 100.0, 3) for b, v in sc.items()}
+        for h, sc in scores_h.items()
+    }
     return {
         "horizon_ans": horizon,
-        "probabilites": par_horizon[str(horizon)],
-        "probabilites_par_horizon": par_horizon,
-        "hors_enveloppe": overs_by_h.get(str(horizon), []),
+        "annee_horizon": annees_h.get(key),
+        "annees_par_horizon": annees_h,
+        "scores": scores,
+        "scores_par_horizon": scores_h,
+        "ecarts": ecarts_h.get(key, {}),
+        "ecarts_par_horizon": ecarts_h,
+        "niveaux_nationaux": nat_h.get(key, {}),
+        "niveaux_nationaux_par_horizon": nat_h,
+        "regime": regime,
+        "bloc_predit": blocs_h[key],
+        "bloc_predit_par_horizon": blocs_h,
+        "probabilites": proba_h[key],
+        "probabilites_par_horizon": proba_h,
+        "hors_enveloppe": overs_by_h.get(key, []),
         "hors_enveloppe_par_horizon": overs_by_h,
         "enveloppe_entrainement": ml_service.envelope(),
         "methode": (
-            "extrapolation_tendances_socioeco + elargissement_incertitude_horizon"
-            " + clamp_enveloppe_entrainement"
+            "regression_ecarts + tendance_nationale(aujourd_hui+h)"
+            " + socio_extrapole + renormalisation_100 + clamp_enveloppe"
         ),
     }
+
+
+@app.get("/model/regression")
+def model_regression():
+    """MAE par bloc (regimes oracle / projete) depuis ml_report.json."""
+    data = ml_service.regression_metrics_from_report()
+    if not data.get("holdout") and not data.get("regression_holdout"):
+        raise HTTPException(404, "Metriques regression indisponibles")
+    return data

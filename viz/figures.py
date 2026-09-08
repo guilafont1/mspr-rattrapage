@@ -83,21 +83,27 @@ ax.set_title("Taux de chomage (N-1) selon le bloc arrive en tete")
 ax.set_xlabel("Bloc gagnant"); ax.set_ylabel("Taux de chomage N-1 (%)")
 fig.tight_layout(); fig.savefig(f"{OUT}/4_chomage_par_bloc.png", dpi=150); plt.close(fig)
 
-# 7 - Importance des variables du modele retenu
-imp = ml["importance_variables"]
+# 7 - Importance des variables du modele retenu (ecarts)
+imp = ml.get("importance_variables") or {}
 fig, ax = plt.subplots(figsize=(8, 4.8))
 items = list(imp.items())[:8][::-1]
 ax.barh([k for k, _ in items], [v for _, v in items], color="#0B1F33")
-ax.set_title(f"Importance des variables -- {ml['modele_retenu']}")
+ax.set_title(f"Importance des variables -- {ml.get('modele_retenu', '')}")
 fig.tight_layout(); fig.savefig(f"{OUT}/7_importance.png", dpi=150); plt.close(fig)
 
-# 8 - Projection probabiliste (modele retenu)
-proj = ml["projection_probabilites_par_bloc"]["1_an(s)"]
-proj = dict(sorted(proj.items(), key=lambda kv: -kv[1]))
-fig, ax = plt.subplots(figsize=(7, 4.5))
-ax.bar(proj.keys(), proj.values(), color=[COLORS.get(b, "#999") for b in proj])
-ax.set_title("Probabilite de bloc en tete -- projection prospective")
-ax.set_ylabel("Probabilite"); ax.set_ylim(0, 1)
-fig.tight_layout(); fig.savefig(f"{OUT}/8_projection.png", dpi=150); plt.close(fig)
+# 8 - Scores moyens reconstruits holdout (regime oracle), pas des probabilites
+proj = ml.get("projection_scores_moyens_holdout_oracle") or {}
+if not proj:
+    choc = ml.get("choc_national_holdout") or {}
+    proj = choc.get("niveau_national") or {}
+if proj:
+    proj = dict(sorted(proj.items(), key=lambda kv: -float(kv[1])))
+    fig, ax = plt.subplots(figsize=(7, 4.5))
+    ax.bar(list(proj.keys()), [float(v) for v in proj.values()],
+           color=[COLORS.get(b, "#999") for b in proj])
+    ax.set_title("Scores moyens reconstruits -- holdout oracle (%)")
+    ax.set_ylabel("Score (%)")
+    ax.set_ylim(0, max(50, max(float(v) for v in proj.values()) * 1.15))
+    fig.tight_layout(); fig.savefig(f"{OUT}/8_projection.png", dpi=150); plt.close(fig)
 
 print("Figures ecrites :", sorted(os.listdir(OUT)))

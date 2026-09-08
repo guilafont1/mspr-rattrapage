@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import os
+from datetime import date
 from pathlib import Path
 
 import dash
@@ -130,6 +131,29 @@ def legend_below(n_items: int = 5) -> dict:
         itemwidth=36,
         traceorder="normal",
     )
+
+
+def legend_in() -> dict:
+    """Légende au-dessus du tracé — ne déborde pas sur le graphique suivant."""
+    return dict(
+        orientation="h",
+        yanchor="bottom",
+        y=1.12,
+        x=0,
+        xanchor="left",
+        title_text="",
+        bgcolor="rgba(0,0,0,0)",
+        borderwidth=0,
+        font=dict(size=12, color=MUTED, family=FONT_UI),
+        itemsizing="constant",
+        itemwidth=40,
+        traceorder="normal",
+    )
+
+
+def ticks_blocs(codes=None):
+    codes = codes or BLOCS
+    return [BLOCS_LABELS.get(b, b) for b in codes]
 
 
 def blocs_key(present=None) -> html.Div:
@@ -858,20 +882,20 @@ def layout_model():
         html.Div(className="ea-panel mb-3", children=[
             html.H2("Analyse du modèle", className="ea-section-title"),
             html.P(
-                "Sélection walk-forward temporel (métrique principale). "
-                "La CV géo reste affichée en secondaire ; le holdout = dernier scrutin.",
+                "Confusion argmax du régime oracle (national 2022 connu). "
+                "Sélection = walk-forward hors holdout. Métrique principale : MAE.",
                 className="ea-section-lead",
             ),
         ]),
         html.Div(className="ea-split mb-3", children=[
             html.Div(className="ea-panel", children=[
-                html.H3("Matrice de confusion", className="ea-section-title", style={"fontSize": "1.2rem"}),
-                html.P("Holdout temporel (dernier scrutin)", className="ea-section-lead"),
+                html.H3("Confusion (argmax)", className="ea-section-title", style={"fontSize": "1.2rem"}),
+                html.P("Holdout temporel — bloc déduit des scores prédits", className="ea-section-lead"),
                 dcc.Loading(dcc.Graph(id="md-confusion", config={"displayModeBar": False}), type="dot"),
             ]),
             html.Div(className="ea-panel", children=[
-                html.H3("Importance des variables", className="ea-section-title", style={"fontSize": "1.2rem"}),
-                html.P("Modèle retenu (walk-forward)", className="ea-section-lead"),
+                html.H3("MAE par bloc (oracle)", className="ea-section-title", style={"fontSize": "1.2rem"}),
+                html.P("Holdout vs persistance de l'écart — national connu", className="ea-section-lead"),
                 dcc.Loading(dcc.Graph(id="md-importance", config={"displayModeBar": False}), type="dot"),
             ]),
         ]),
@@ -901,56 +925,93 @@ def model_figs(tab):
             text=z, texttemplate="%{text}", hovertemplate="Réel %{y} · Prédit %{x} : %{z}<extra></extra>",
         ))
         acc = conf.get("accuracy_test_2022")
-        sub = f"Accuracy test 2022 : {acc:.0%}" if acc is not None else ""
-        base_layout(fig_cm, f"Confusion — test 2022  {sub}", height=420)
+        sub = f"Accuracy argmax 2022 : {acc:.0%}" if acc is not None else ""
+        base_layout(fig_cm, f"Confusion argmax  {sub}", height=420)
         fig_cm.update_layout(xaxis_title="Prédit", yaxis_title="Réel",
                              margin=dict(l=64, r=40, b=56))
     else:
         fig_cm = empty_fig("Matrice indisponible")
 
-    imp_data = api_get("/model/importance") or {}
-    imp = imp_data.get("importances") or {}
-    if imp:
-        items = list(imp.items())[:12][::-1]
-        fig_imp = go.Figure(go.Bar(
-            x=[v for _, v in items], y=[k for k, _ in items], orientation="h",
+    reg = api_get("/model/regression") or {}
+    hold = (reg.get("holdout") or reg.get("regression_holdout") or {})
+    oracle = hold.get("oracle") or {}
+    modele = oracle.get("par_bloc_score") or hold.get("modele") or {}
+    base = (oracle.get("baseline_persistance_ecart") or {}).get("par_bloc_score") or {}
+    if modele:
+        fig_imp = go.Figure()
+        fig_imp.add_trace(go.Bar(
+            name="Modèle", x=BLOCS,
+            y=[(modele.get(b) or {}).get("mae") for b in BLOCS],
             marker_color=INK,
-            hovertemplate="<b>%{y}</b><br>%{x:.3f}<extra></extra>",
         ))
-        base_layout(fig_imp, f"Importance — {imp_data.get('modele_retenu', 'modèle')}", height=420)
-        fig_imp.update_layout(xaxis_title="Importance", yaxis_title="",
-                              margin=dict(l=140, r=40, b=48))
+        fig_imp.add_trace(go.Bar(
+            name="Persist. écart", x=BLOCS,
+            y=[(base.get(b) or {}).get("mae") for b in BLOCS],
+            marker_color=MUTED,
+        ))
+        note = reg.get("metrique_principale") or "MAE"
+        base_layout(
+            fig_imp,
+            f"{note} scores oracle — {reg.get('modele_retenu', '')}",
+            height=420,
+        )
+        fig_imp.update_layout(barmode="group", yaxis_title="MAE (pts)",
+                              legend=legend_below(2), margin=dict(l=56, r=40, b=72))
     else:
-        fig_imp = empty_fig("Importances indisponibles")
+        imp_data = api_get("/model/importance") or {}
+        imp = imp_data.get("importances") or {}
+        if imp:
+            items = list(imp.items())[:12][::-1]
+            fig_imp = go.Figure(go.Bar(
+                x=[v for _, v in items], y=[k for k, _ in items], orientation="h",
+                marker_color=INK,
+            ))
+            base_layout(fig_imp, "Importance", height=420)
+        else:
+            fig_imp = empty_fig("MAE indisponible")
 
     comp = api_get("/model/comparison") or {}
     rows = comp.get("modeles") or []
+    poids = (comp.get("poids_socio_eco") or {})
     if not rows:
         table = html.P("Rapport ml_report.json indisponible côté API.", className="text-muted")
     else:
         header = html.Thead(html.Tr([
-            html.Th("Modèle"), html.Th("Acc. walk-fwd"), html.Th("F1 walk-fwd"),
-            html.Th("Acc. holdout"), html.Th("CV géo"), html.Th(""),
+            html.Th("Modèle"), html.Th("MAE écart sel."), html.Th("Acc. oracle sel."),
+            html.Th("Acc. oracle"), html.Th("Acc. projeté"),
+            html.Th("MAE oracle"), html.Th(""),
         ]))
         body_rows = []
         for r in rows:
             badge = dbc.Badge("Retenu", color="danger") if r.get("retenu") else ""
+            def _f(key, digits=3):
+                v = r.get(key)
+                return f"{v:.{digits}f}" if v is not None else "—"
             body_rows.append(html.Tr([
                 html.Td(r.get("modele", "")),
-                html.Td(f"{r['accuracy_walkforward']:.3f}" if r.get("accuracy_walkforward") is not None else "—"),
-                html.Td(f"{r['f1_macro_walkforward']:.3f}" if r.get("f1_macro_walkforward") is not None else "—"),
-                html.Td(f"{r['accuracy_test_2022']:.3f}" if r.get("accuracy_test_2022") is not None else "—"),
-                html.Td(f"{r['accuracy_cv_groupee']:.3f}" if r.get("accuracy_cv_groupee") is not None else "—"),
+                html.Td(_f("mae_ecart_walkforward_hors_holdout")),
+                html.Td(_f("accuracy_oracle_hors_holdout")),
+                html.Td(_f("accuracy_oracle_holdout")),
+                html.Td(_f("accuracy_projete_holdout")),
+                html.Td(_f("mae_score_oracle_holdout")),
                 html.Td(badge),
             ]))
-        table = dbc.Table([header, html.Tbody(body_rows)], bordered=True, hover=True, responsive=True, size="sm")
+        socio_note = ""
+        if poids.get("part_socio_eco") is not None:
+            socio_note = (
+                f" · part socio-éco dans l'importance : {poids['part_socio_eco']:.0%} "
+                f"(écart : {poids.get('part_electorale', 0):.0%})"
+            )
+        proto = (comp.get("protocole") or {}).get("avertissement") or ""
         table = html.Div([
             html.P(
                 f"Source : {comp.get('source')} · modèle retenu : {comp.get('modele_retenu')} · "
-                f"n = {comp.get('n_observations')}",
+                f"n = {comp.get('n_observations')} · métrique : {comp.get('metrique_principale', 'MAE')}"
+                f"{socio_note}",
                 className="small text-muted",
             ),
-            table,
+            html.P(proto, className="small text-muted") if proto else html.Div(),
+            dbc.Table([header, html.Tbody(body_rows)], bordered=True, hover=True, responsive=True, size="sm"),
         ])
 
     return fig_cm, fig_imp, table
@@ -963,12 +1024,30 @@ PREDICT_FEATURES = [
     "taux_pauvrete_n1", "creations_entreprises_n1",
     "pct_gagnant_precedent", "marge_gagnante_precedente",
     "bloc_gagnant_precedent",
+    "pct_EXG_prec", "pct_GAU_prec", "pct_CEN_prec", "pct_DRO_prec", "pct_EXD_prec",
+    "delta_recent_EXG", "delta_recent_GAU", "delta_recent_CEN",
+    "delta_recent_DRO", "delta_recent_EXD",
+    "delta_long_EXG", "delta_long_GAU", "delta_long_CEN",
+    "delta_long_DRO", "delta_long_EXD",
+    "trend_EXG", "trend_GAU", "trend_CEN", "trend_DRO", "trend_EXD",
+    "volatility_EXG", "volatility_GAU", "volatility_CEN",
+    "volatility_DRO", "volatility_EXD",
+    "ecart_EXG_prec", "ecart_GAU_prec", "ecart_CEN_prec",
+    "ecart_DRO_prec", "ecart_EXD_prec",
+    "delta_recent_ecart_EXG", "delta_recent_ecart_GAU", "delta_recent_ecart_CEN",
+    "delta_recent_ecart_DRO", "delta_recent_ecart_EXD",
+    "delta_long_ecart_EXG", "delta_long_ecart_GAU", "delta_long_ecart_CEN",
+    "delta_long_ecart_DRO", "delta_long_ecart_EXD",
+    "trend_ecart_EXG", "trend_ecart_GAU", "trend_ecart_CEN",
+    "trend_ecart_DRO", "trend_ecart_EXD",
+    "volatility_ecart_EXG", "volatility_ecart_GAU", "volatility_ecart_CEN",
+    "volatility_ecart_DRO", "volatility_ecart_EXD",
 ]
 
-# Leviers what-if = features réellement utilisées par le modèle (hors lags politiques).
-# Bornes = enveloppe d'entraînement observée dans data/gold/dataset_analytique.csv
-# (lignes avec bloc_gagnant_precedent non nul). À recalculer après chaque
-# run_pipeline.py — un arbre / RF n'extrapole pas hors de cette enveloppe.
+# Leviers what-if = features du modele (hors lags politiques).
+# Bornes = enveloppe GOLD reel (lignes avec bloc_gagnant_precedent non nul).
+# A recalculer apres chaque run_pipeline.py --real.
+# creations_entreprises_n1 exclue du modele (option B) : absente ici.
 WHATIF_METRICS = {
     "taux_chomage_n1": {
         "short": "Chômage",
@@ -977,8 +1056,8 @@ WHATIF_METRICS = {
         "unit": " %",
         "step": 0.1,
         "digits": 1,
-        "pad": 3.6,  # ≈ 2 σ
-        "clamp": (3.79, 12.01),
+        "pad": 3.5,  # ≈ 2 σ (σ≈1,77)
+        "clamp": (4.3, 15.12),
         "shock": 1.8,
         "shock_txt": "pts",
         "fallback": 8.0,
@@ -991,9 +1070,9 @@ WHATIF_METRICS = {
         "unit": " pts",
         "step": 0.05,
         "digits": 2,
-        "pad": 0.9,  # ≈ 2 σ
-        "clamp": (-0.92, 0.72),
-        "shock": 0.45,
+        "pad": 1.1,  # ≈ 2 σ (σ≈0,55)
+        "clamp": (-1.53, 1.49),
+        "shock": 0.55,
         "shock_txt": "pts",
         "fallback": 0.0,
     },
@@ -1004,9 +1083,9 @@ WHATIF_METRICS = {
         "unit": "",
         "step": 5,
         "digits": 0,
-        "pad": 82,  # ≈ 2 σ
-        "clamp": (301, 467),
-        "shock": 40,
+        "pad": 136,  # ≈ 2 σ (σ≈67,8)
+        "clamp": (283.3, 876.3),
+        "shock": 68,
         "shock_txt": "",
         "fallback": 350,
     },
@@ -1017,11 +1096,11 @@ WHATIF_METRICS = {
         "unit": " %",
         "step": 0.2,
         "digits": 1,
-        "pad": 2.0,  # ≈ 2 σ
-        "clamp": (-1.2, 7.8),
-        "shock": 1.0,
+        "pad": 7.5,  # ≈ 2 σ (σ≈3,76)
+        "clamp": (-5.91, 11.56),
+        "shock": 3.8,
         "shock_txt": "pts",
-        "fallback": 1.0,
+        "fallback": 2.0,
     },
     "croissance_pop_5a_pct": {
         "short": "Croissance pop.",
@@ -1030,52 +1109,37 @@ WHATIF_METRICS = {
         "unit": " %",
         "step": 0.2,
         "digits": 1,
-        "pad": 1.4,  # ≈ 2 σ
-        "clamp": (-1.8, 7.9),
-        "shock": 0.7,
+        "pad": 5.2,  # ≈ 2 σ (σ≈2,62)
+        "clamp": (-4.2, 10.17),
+        "shock": 2.6,
         "shock_txt": "pts",
-        "fallback": 0.0,
-    },
-    "creations_entreprises_n1": {
-        "short": "Créations d'entreprises",
-        "label": "Créations d'entreprises / 10 000 hab.",
-        "question": "Et si les créations d'entreprises (pour 10 000 hab.) étaient de…",
-        "unit": "",
-        "step": 1,
-        "digits": 0,
-        "pad": 52,  # ≈ 2 σ
-        "clamp": (62, 166),
-        "shock": 26,
-        "shock_txt": "",
-        "fallback": 100,
+        "fallback": 1.0,
     },
 }
 
-# Scénarios narratifs (France) — chocs ≈ 1 σ par levier (dans l'enveloppe)
+# Scénarios narratifs — chocs ≈ 1 σ par levier (enveloppe GOLD réelle)
 SCENARIOS = {
     "crise": {
         "label": "Crise économique",
-        "blurb": "Chômage en nette hausse, emploi et créations d’entreprises en repli.",
+        "blurb": "Chômage en nette hausse, emploi et dynamisme productif en repli.",
         "horizon": 2,
         "deltas": {
             "taux_chomage_n1": 1.8,
-            "delta_chomage_5a": 0.45,
-            "emploi_pour_1000hab": -40,
-            "croissance_emploi_5a_pct": -1.0,
-            "creations_entreprises_n1": -26,
+            "delta_chomage_5a": 0.55,
+            "emploi_pour_1000hab": -68,
+            "croissance_emploi_5a_pct": -3.8,
         },
     },
     "reprise": {
         "label": "Reprise / croissance",
-        "blurb": "Baisse du chômage, dynamisme de l’emploi et des créations.",
+        "blurb": "Baisse du chômage, dynamisme de l’emploi et de la démographie.",
         "horizon": 2,
         "deltas": {
             "taux_chomage_n1": -1.4,
-            "delta_chomage_5a": -0.45,
-            "emploi_pour_1000hab": 35,
-            "croissance_emploi_5a_pct": 1.0,
-            "creations_entreprises_n1": 26,
-            "croissance_pop_5a_pct": 0.7,
+            "delta_chomage_5a": -0.55,
+            "emploi_pour_1000hab": 68,
+            "croissance_emploi_5a_pct": 3.8,
+            "croissance_pop_5a_pct": 2.6,
         },
     },
     "tension": {
@@ -1085,13 +1149,63 @@ SCENARIOS = {
         "deltas": {
             "taux_chomage_n1": 0.9,
             "delta_chomage_5a": 0.3,
-            "emploi_pour_1000hab": -20,
-            "croissance_emploi_5a_pct": -0.6,
-            "croissance_pop_5a_pct": -0.5,
-            "creations_entreprises_n1": -14,
+            "emploi_pour_1000hab": -34,
+            "croissance_emploi_5a_pct": -2.3,
+            "croissance_pop_5a_pct": -1.3,
         },
     },
 }
+
+
+def _feature_humain(name):
+    """Nom de variable compréhensible (pas le code GOLD)."""
+    key = str(name or "")
+    if key in WHATIF_METRICS:
+        return WHATIF_METRICS[key]["label"]
+    socio = {
+        "delta_chomage_1a": "la variation du chômage sur 1 an",
+        "taux_pauvrete_n1": "le taux de pauvreté",
+        "creations_entreprises_n1": "les créations d’entreprises",
+    }
+    if key in socio:
+        return socio[key]
+    prefixes = (
+        ("delta_long_ecart_", "l’écart de long terme"),
+        ("delta_recent_ecart_", "l’écart récent"),
+        ("volatility_ecart_", "l’instabilité de l’écart"),
+        ("trend_ecart_", "la tendance de l’écart"),
+        ("ecart_", "l’écart au national"),
+    )
+    de_bloc = {
+        "EXG": "de l’extrême gauche",
+        "GAU": "de la gauche",
+        "CEN": "du centre",
+        "DRO": "de la droite",
+        "EXD": "de l’extrême droite",
+    }
+    for prefix, phrase in prefixes:
+        if key.startswith(prefix):
+            bloc = key[len(prefix):].replace("_prec", "").upper()
+            return f"{phrase} {de_bloc.get(bloc, bloc)}"
+    return "un indicateur interne"
+
+
+def _phrase_hors_enveloppe(item):
+    nom = _feature_humain(item.get("feature"))
+    titre = nom[0].upper() + nom[1:] if nom else "Un indicateur"
+    try:
+        val = float(item.get("valeur"))
+        lo = float(item.get("min"))
+        hi = float(item.get("max"))
+    except (TypeError, ValueError):
+        return f"{titre} sort du cadre déjà observé."
+    cote = "au-dessus" if val > hi else "en dessous"
+    return (
+        f"{titre} : {cote} de tout ce qui a été vu "
+        f"sur 2002–2022 ({_fmt_num(val, digits=1)}, "
+        f"alors que le connu va de {_fmt_num(lo, digits=1)} "
+        f"à {_fmt_num(hi, digits=1)})."
+    )
 
 
 def _fmt_num(val, suffix="", digits=1):
@@ -1184,6 +1298,29 @@ def _build_payload(baseline, overrides):
     return payload
 
 
+def _fold_record(row):
+    """Aligne les cles Postgres minuscules sur les noms GOLD du front."""
+    if not row:
+        return row
+    lower = {str(k).lower(): v for k, v in row.items()}
+    out = dict(row)
+    wanted = list(PREDICT_FEATURES) + [
+        "annee", "annee_cible", "code_dept", "libelle", "perimetre",
+        "n_departements", "bloc_gagnant", "niveaux_nationaux_tendance",
+        "scenario_national_defaut", "pct_gagnant", "marge_gagnante",
+    ]
+    for k in wanted:
+        if out.get(k) is None and k.lower() in lower:
+            out[k] = lower[k.lower()]
+    tend = out.get("niveaux_nationaux_tendance")
+    if isinstance(tend, dict):
+        tl = {str(k).lower(): v for k, v in tend.items()}
+        out["niveaux_nationaux_tendance"] = {
+            b: tl.get(b.lower(), tend.get(b)) for b in BLOCS
+        }
+    return out
+
+
 def _metric_slider_block(key, baseline, value=None):
     spec = WHATIF_METRICS[key]
     lo, hi, step, marks, real = _slider_conf(key, baseline)
@@ -1215,6 +1352,7 @@ def _metric_slider_block(key, baseline, value=None):
 
 def layout_predict(depts):
     depts = depts or []
+    now = date.today().year
     opts = [{"label": "France (national)", "value": "FR"}] + dept_dropdown_options(depts)
     default = "FR"
     metric_opts = [{"label": spec["short"], "value": key} for key, spec in WHATIF_METRICS.items()]
@@ -1222,9 +1360,10 @@ def layout_predict(depts):
         html.Div(className="ea-panel mb-3", children=[
             html.H2("Prédiction what-if", className="ea-section-title"),
             html.P(
-                "Prévision France (agrégat national) sur 1 / 2 / 3 ans (sujet préfecture). "
-                "Choisissez les métriques à simuler : les autres restent à la moyenne nationale. "
-                "Un département reste disponible en option pour un zoom territorial.",
+                "Simulez un choc socio-économique (chômage, emploi, démographie). "
+                "Le modèle prédit l’écart du département ; le niveau France "
+                "suit la tendance de l’année projetée (à partir de maintenant, "
+                "pas un retour sur 2023–2025).",
                 className="ea-section-lead",
             ),
             html.Div([
@@ -1281,9 +1420,9 @@ def layout_predict(depts):
                 dcc.RadioItems(
                     id="p-horizon",
                     options=[
-                        {"label": "1 an", "value": 1},
-                        {"label": "2 ans", "value": 2},
-                        {"label": "3 ans", "value": 3},
+                        {"label": f"1 an ({now + 1})", "value": 1},
+                        {"label": f"2 ans ({now + 2})", "value": 2},
+                        {"label": f"3 ans ({now + 3})", "value": 3},
                     ],
                     value=1,
                     inline=True,
@@ -1292,13 +1431,14 @@ def layout_predict(depts):
                     labelClassName="ea-metric-pick",
                 ),
                 html.P(
-                    "Plus l’horizon est lointain, plus l’incertitude est élargie "
-                    "(tendances socio-éco extrapolées).",
+                    f"À partir d’aujourd’hui ({now}) : 1 an = {now + 1} "
+                    f"(prochaine présidentielle), 2 ans = {now + 2}, "
+                    f"3 ans = {now + 3}. On ne rejoue pas 2023–2025.",
                     className="ea-metric-sub mb-0 mt-2",
                 ),
             ], className="mb-4"),
             html.Div([
-                html.Label("Métriques à simuler via le modèle", className="ea-label"),
+                html.Label("Leviers socio-économiques", className="ea-label"),
                 dcc.Checklist(
                     id="p-metrics",
                     options=metric_opts,
@@ -1309,8 +1449,10 @@ def layout_predict(depts):
                     labelClassName="ea-metric-pick",
                 ),
                 html.P(
-                    "Cochez un ou plusieurs leviers. "
-                    "Les métriques non cochées restent à leur valeur réelle (France ou département).",
+                    "Cochez les variables INSEE à faire varier. "
+                    "Chaque curseur a sa propre unité (chômage en %, emploi "
+                    "pour 1 000 hab., etc.) : ils ne se somment pas. "
+                    "Les métriques non cochées restent à leur valeur réelle.",
                     className="ea-metric-sub mb-0 mt-2",
                 ),
             ], className="mb-2"),
@@ -1327,14 +1469,23 @@ def layout_predict(depts):
         ]),
         html.Div(id="p-winner"),
         dcc.Loading(dcc.Graph(id="p-graph", config={"displayModeBar": False}), type="dot"),
+        dcc.Loading(dcc.Graph(id="p-graph-ecarts", config={"displayModeBar": False}), type="dot"),
         dcc.Loading(dcc.Graph(id="p-graph-horizons", config={"displayModeBar": False}), type="dot"),
         dcc.Loading(dcc.Graph(id="p-graph-scenarios", config={"displayModeBar": False}), type="dot"),
     ])
 
 
-def _predict_context(row):
+def _annee_courante():
+    return date.today().year
+
+
+def _horizon_year(_row, horizon):
+    return _annee_courante() + int(horizon or 1)
+
+
+def _predict_context(row, horizon=1):
     annee = row.get("annee")
-    annee_cible = row.get("annee_cible")
+    annee_h = _horizon_year(row, horizon)
     dept = str(row.get("code_dept", "")).strip()
     is_fr = dept == "FR" or row.get("perimetre") == "france"
     lib = "France" if is_fr else (dept_label_map().get(dept) or row.get("libelle") or dept)
@@ -1342,21 +1493,19 @@ def _predict_context(row):
         ref = f"France · baseline {annee} ({row['n_departements']} depts)" if annee else "France"
     else:
         ref = f"{lib} · baseline {annee}" if annee else lib
-    if annee_cible:
-        ref = f"{ref} → cible {annee_cible}"
+    ref = f"{ref} → {annee_h}"
     prec = row.get("bloc_gagnant_precedent")
     obs = row.get("bloc_gagnant")
     chom_label = "Chômage moyen" if is_fr else "Chômage réel"
     obs_label = f"Majorité {annee}" if is_fr and annee else (f"Observé {annee}" if annee else "Observé")
-    cible_label = f"Cible prévision" if annee_cible else "Cible"
     return html.Div(className="ea-snap", children=[
         html.Div([
             html.Div("Référence", className="ea-metric-label"),
             html.Div(ref, className="ea-snap-value"),
         ], className="ea-snap-item"),
         html.Div([
-            html.Div(cible_label, className="ea-metric-label"),
-            html.Div(str(annee_cible) if annee_cible else "—", className="ea-snap-value"),
+            html.Div("Projection", className="ea-metric-label"),
+            html.Div(str(annee_h), className="ea-snap-value"),
         ], className="ea-snap-item"),
         html.Div([
             html.Div(chom_label, className="ea-metric-label"),
@@ -1391,18 +1540,37 @@ def _predict_context(row):
     Output("p-baseline", "data"),
     Output("p-context", "children"),
     Input("p-dept", "value"),
+    Input("p-horizon", "value"),
+    State("p-baseline", "data"),
 )
-def load_predict_baseline(dept):
+def load_predict_baseline(dept, horizon, current):
+    tid = dash.callback_context.triggered_id
+    horizon = int(horizon or 1)
+    if tid == "p-horizon" and current:
+        return current, _predict_context(current, horizon)
     if not dept:
         return None, html.P("Choisissez un périmètre (France ou département).", className="text-muted")
-    row = api_get("/predict/baseline", dept=dept)
+    row = _fold_record(api_get("/predict/baseline", dept=dept))
     if not row:
         label = "France" if str(dept).upper() in ("FR", "FRANCE") else f"le département {dept}"
         return None, dbc.Alert(
             f"Pas de données GOLD pour {label}.",
             color="warning", className="py-2",
         )
-    return row, _predict_context(row)
+    return row, _predict_context(row, horizon)
+
+
+@app.callback(
+    Output("p-horizon", "options"),
+    Input("p-baseline", "data"),
+)
+def label_horizons(_baseline):
+    now = _annee_courante()
+    return [
+        {"label": f"1 an ({now + 1})", "value": 1},
+        {"label": f"2 ans ({now + 2})", "value": 2},
+        {"label": f"3 ans ({now + 3})", "value": 3},
+    ]
 
 
 @app.callback(
@@ -1431,7 +1599,7 @@ def apply_scenario(_crise, _reprise, _tension, _real):
     metrics = list(sc["deltas"].keys())
     badge = html.Div(className=f"ea-scenario-badge ea-scenario-{key}", children=[
         html.Strong(f"Scénario actif : {sc['label']}"),
-        html.Span(f" — {sc['blurb']} (horizon {sc['horizon']} ans)"),
+        html.Span(f" — {sc['blurb']} (projection +{sc['horizon']} ans)"),
     ])
     return key, metrics, sc["horizon"], badge
 
@@ -1479,6 +1647,7 @@ def update_slider_readouts(values, ids):
 
 @app.callback(
     Output("p-graph", "figure"),
+    Output("p-graph-ecarts", "figure"),
     Output("p-graph-horizons", "figure"),
     Output("p-winner", "children"),
     Input("p-baseline", "data"),
@@ -1494,7 +1663,7 @@ def predict_fig(baseline, horizon, metrics, scenario, slider_vals, slider_ids):
         horizon = 1
     if not baseline:
         empty = empty_fig("Choisissez un périmètre")
-        return empty, empty, html.Div()
+        return empty, empty, empty, html.Div()
 
     selected = set(m for m in (metrics or []) if m in WHATIF_METRICS)
     sim_notes = []
@@ -1504,7 +1673,6 @@ def predict_fig(baseline, horizon, metrics, scenario, slider_vals, slider_ids):
         if key in selected:
             overrides[key] = float(val)
 
-    payload = _build_payload(baseline, overrides)
     for key, sim_val in overrides.items():
         spec = WHATIF_METRICS[key]
         real = baseline.get(key)
@@ -1516,106 +1684,177 @@ def predict_fig(baseline, horizon, metrics, scenario, slider_vals, slider_ids):
             )
         )
 
+    payload = _build_payload(baseline, overrides)
     payload["horizon_ans"] = horizon
+    payload["scenario_national"] = "tendance"
+    payload["niveaux_nationaux"] = None
+    payload["annee_cible"] = baseline.get("annee_cible")
     code, body = api_post("/predict", payload)
     if code >= 400:
         err = empty_fig(f"Erreur API {code} : {body.get('detail', body)}")
-        return err, err, html.Div()
+        return err, err, err, html.Div()
 
-    par_h = body.get("probabilites_par_horizon") or {}
-    proba = body.get("probabilites") or par_h.get(str(horizon)) or {}
-    if not proba:
-        empty = empty_fig("Pas de probabilités")
-        return empty, empty, html.Div()
+    par_h = body.get("scores_par_horizon") or {}
+    scores = body.get("scores") or par_h.get(str(horizon)) or {}
+    # Compat si API renvoie encore probabilites
+    if not scores:
+        proba = body.get("probabilites") or {}
+        if proba:
+            scores = {k: (v * 100.0 if v <= 1.5 else v) for k, v in proba.items()}
+    if not scores:
+        empty = empty_fig("Pas de scores prédits")
+        return empty, empty, empty, html.Div()
 
-    if max(proba.values()) > 1.5:
-        proba = {k: v / 100.0 for k, v in proba.items()}
+    winner = body.get("bloc_predit") or max(scores.items(), key=lambda kv: kv[1])[0]
+    win_score = float(scores.get(winner, 0) or 0)
 
-    ordered = sorted(proba.items(), key=lambda kv: kv[1])
-    winner, win_p = max(proba.items(), key=lambda kv: kv[1])
-    labels = [b for b, _ in ordered]
-    values = [p for _, p in ordered]
+    ecarts = body.get("ecarts") or {}
+    nat_used = body.get("niveaux_nationaux") or {}
+    annee_h = body.get("annee_horizon") or _horizon_year(baseline, horizon)
 
-    fig = go.Figure(go.Bar(
-        x=values, y=labels, orientation="h",
-        marker=dict(
-            color=[COLORS.get(b, MUTED) for b in labels],
-            opacity=[1.0 if b == winner else 0.7 for b in labels],
-            line=dict(width=[2.5 if b == winner else 0 for b in labels], color=SIGNAL),
-        ),
-        text=[f"{p:.0%}" for p in values],
-        textposition="inside",
-        insidetextanchor="end",
-        textfont=dict(color=PAPER, size=13),
-        hovertemplate="%{y} : %{x:.1%}<extra></extra>",
+    fig = go.Figure()
+    fig.add_trace(go.Bar(
+        name="France (tendance)",
+        x=ticks_blocs(),
+        y=[float(nat_used.get(b, 0) or 0) for b in BLOCS],
+        marker_color="#9AA8B5",
+        hovertemplate="%{x} en France : %{y:.1f} %<extra></extra>",
     ))
-    base_layout(fig, f"Probabilités à {horizon} an{'s' if horizon > 1 else ''}", height=360)
-    fig.update_layout(
-        xaxis=dict(range=[0, 1], tickvals=[0, 0.25, 0.5, 0.75, 1],
-                   ticktext=["0 %", "25 %", "50 %", "75 %", "100 %"], title=""),
-        yaxis_title="",
-        margin=dict(l=72, r=40, b=48),
+    fig.add_trace(go.Bar(
+        name="Ce territoire",
+        x=ticks_blocs(),
+        y=[float(scores.get(b, 0) or 0) for b in BLOCS],
+        marker_color=[COLORS.get(b, INK) for b in BLOCS],
+        hovertemplate="%{x} ici : %{y:.1f} %<extra></extra>",
+    ))
+    ymax = max(
+        [float(scores.get(b, 0) or 0) for b in BLOCS]
+        + [float(nat_used.get(b, 0) or 0) for b in BLOCS]
+        + [1]
     )
-    fig.add_vline(x=0.5, line_dash="dash", line_color="rgba(11,31,51,0.25)")
+    base_layout(
+        fig,
+        f"Ce territoire face à la France — {annee_h}",
+        subtitle="Gris = tendance nationale · couleur = score du département",
+        height=400,
+        bottom_legend=False,
+    )
+    fig.update_layout(
+        barmode="group",
+        yaxis=dict(range=[0, ymax * 1.18], title="Score (%)", rangemode="tozero"),
+        xaxis=dict(title="", tickfont=dict(size=12)),
+        legend=legend_in(),
+        margin=dict(l=56, r=24, b=48, t=108),
+        showlegend=True,
+    )
+
+    ordre_ecart = list(reversed(BLOCS))
+    vals_e = [float(ecarts.get(b, 0) or 0) for b in ordre_ecart]
+    fig_e = go.Figure(go.Bar(
+        x=vals_e,
+        y=[BLOCS_LABELS.get(b, b) for b in ordre_ecart],
+        orientation="h",
+        marker=dict(color=[COLORS.get(b, MUTED) for b in ordre_ecart]),
+        text=[f"{v:+.1f} pt" for v in vals_e],
+        textposition="outside",
+        cliponaxis=False,
+        textfont=dict(size=12, color=INK),
+        hovertemplate="%{y} : %{x:+.1f} pt par rapport à la France<extra></extra>",
+        showlegend=False,
+    ))
+    lo_e = min(vals_e + [0])
+    hi_e = max(vals_e + [0])
+    pad_e = max(0.8, (hi_e - lo_e) * 0.4)
+    base_layout(
+        fig_e,
+        "Plus ou moins que la France",
+        subtitle="À droite : le département vote plus que la moyenne · à gauche : moins",
+        height=340,
+        bottom_legend=False,
+    )
+    fig_e.update_layout(
+        showlegend=False,
+        xaxis=dict(
+            title="",
+            range=[lo_e - pad_e, hi_e + pad_e],
+            zeroline=True,
+            zerolinecolor=INK,
+            zerolinewidth=1,
+            ticksuffix=" pt",
+        ),
+        yaxis=dict(title="", automargin=True),
+        margin=dict(l=140, r=72, b=40, t=100),
+    )
 
     fig_h = go.Figure()
-    blocs_order = [b for b in BLOCS if any(b in (par_h.get(str(h)) or {}) for h in (1, 2, 3))]
-    if not blocs_order:
-        blocs_order = list(proba.keys())
+    raw_h = body.get("scores_par_horizon") or {}
+    if not raw_h:
+        raw_h = {
+            str(h): {b: v * 100 for b, v in (body.get("probabilites_par_horizon") or {}).get(str(h), {}).items()}
+            for h in (1, 2, 3)
+        }
+    years_h = body.get("annees_par_horizon") or {}
+    year_colors = {1: "#0B1F33", 2: "#2A5F9E", 3: "#8AA4C0"}
+    ymax_h = 1.0
     for h in (1, 2, 3):
-        ph = par_h.get(str(h)) or {}
-        if ph and max(ph.values()) > 1.5:
-            ph = {k: v / 100.0 for k, v in ph.items()}
+        ph = raw_h.get(str(h)) or {}
+        annee_bar = years_h.get(str(h)) or _horizon_year(baseline, h)
+        ys = [float(ph.get(b, 0) or 0) for b in BLOCS]
+        ymax_h = max(ymax_h, max(ys) if ys else 0)
         fig_h.add_trace(go.Bar(
-            name=f"{h} an" if h == 1 else f"{h} ans",
-            x=blocs_order,
-            y=[ph.get(b, 0) for b in blocs_order],
-            marker_color=[COLORS.get(b, MUTED) for b in blocs_order],
-            opacity=0.55 if h != horizon else 1.0,
-            hovertemplate="%{x} · " + (f"{h} an" if h == 1 else f"{h} ans")
-            + " : %{y:.1%}<extra></extra>",
+            name=str(annee_bar),
+            x=ticks_blocs(),
+            y=ys,
+            marker_color=year_colors[h],
+            opacity=1.0 if h == horizon else 0.72,
+            hovertemplate="%{x} en " + str(annee_bar) + " : %{y:.1f} %<extra></extra>",
         ))
-    base_layout(fig_h, "Comparaison des horizons 1 / 2 / 3 ans", height=340)
+    annees_titre = " → ".join(
+        str(years_h.get(str(h)) or _horizon_year(baseline, h)) for h in (1, 2, 3)
+    )
+    base_layout(
+        fig_h,
+        "Évolution sur 3 ans",
+        subtitle=f"{annees_titre} · une couleur par année (la plus foncée = l’horizon choisi)",
+        height=400,
+        bottom_legend=False,
+    )
     fig_h.update_layout(
         barmode="group",
-        yaxis=dict(range=[0, 1], tickformat=".0%", title=""),
-        xaxis_title="",
-        legend=legend_below(3),
-        margin=dict(l=48, r=24, b=72, t=56),
+        yaxis=dict(range=[0, ymax_h * 1.18], title="Score (%)", rangemode="tozero"),
+        xaxis=dict(title="", tickfont=dict(size=12)),
+        legend=legend_in(),
+        margin=dict(l=56, r=24, b=48, t=108),
+        showlegend=True,
     )
 
     annee = baseline.get("annee")
-    annee_cible = baseline.get("annee_cible")
     obs = baseline.get("bloc_gagnant")
     is_fr = str(baseline.get("code_dept", "")).upper() == "FR" or baseline.get("perimetre") == "france"
     scope = "France" if is_fr else f"référence {annee}"
-    cible_txt = f" · cible {annee_cible}" if annee_cible else ""
     sc_label = SCENARIOS[scenario]["label"] if scenario in SCENARIOS else None
     if sc_label:
         note = (
-            f"Scénario « {sc_label} » · horizon {horizon} an{'s' if horizon > 1 else ''} · "
+            f"Scénario « {sc_label} » · projection {annee_h} · "
             f"baseline {scope}"
             + (f" ({annee})" if is_fr and annee else "")
-            + cible_txt
             + "."
         )
         if sim_notes:
             note += f" Leviers : {'; '.join(sim_notes)}."
     elif sim_notes:
         note = (
-            f"Horizon {horizon} an{'s' if horizon > 1 else ''} · "
+            f"Projection {annee_h} · "
             f"leviers : {'; '.join(sim_notes)}. "
             f"Baseline {scope}"
             + (f" ({annee})" if is_fr and annee else "")
-            + cible_txt
             + "."
         )
     else:
         note = (
-            f"Horizon {horizon} an{'s' if horizon > 1 else ''} · "
+            f"Projection {annee_h} · "
             f"aucune métrique simulée (baseline {scope}"
             + (f" {annee}" if annee else "")
-            + cible_txt
             + ")."
         )
         if obs:
@@ -1624,31 +1863,35 @@ def predict_fig(baseline, horizon, metrics, scenario, slider_vals, slider_ids):
 
     hors = body.get("hors_enveloppe") or []
     if hors:
-        details = ", ".join(
-            f"{o.get('feature')}={o.get('valeur')} ∉ [{o.get('min')}; {o.get('max')}]"
-            for o in hors
-        )
+        lignes = [_phrase_hors_enveloppe(o) for o in hors]
         winner_box = html.Div(className="pred-winner", children=[
             dbc.Alert(
                 [
-                    html.Strong("Hors enveloppe d'entraînement — prédiction non conclusive. "),
-                    html.Span(
-                        "Au moins une feature dépasse le min/max observé à l'entraînement ; "
-                        "le modèle (arbre / forêt) ne généralise pas au-delà. "
-                        f"Dépassements : {details}."
+                    html.Strong("On ne peut pas se fier à ce résultat. "),
+                    html.P(
+                        "Le modèle n’a appris que sur les départements réels "
+                        "de 2002 à 2022. Ici, la situation demandée va plus loin "
+                        "que tout ce qu’il a déjà vu — souvent parce que l’horizon "
+                        "éloigne trop le département, ou qu’un levier socio est "
+                        "trop fort. Le calcul tourne quand même, mais ce n’est "
+                        "plus une prédiction : juste un ordre de grandeur.",
+                        className="mb-2 mt-2",
+                    ),
+                    html.Ul(
+                        [html.Li(txt) for txt in lignes],
+                        className="mb-0 ps-3",
                     ),
                 ],
                 color="warning",
                 className="mb-2 py-2",
             ),
             html.Div(
-                f"Distribution indicative à {horizon} an{'s' if horizon > 1 else ''} "
-                f"(après clamp) — pas de vainqueur tranché",
+                f"Indication seulement pour {annee_h} — pas de vainqueur fiable",
                 className="ea-metric-label",
             ),
             html.Div(
-                f"Tête de liste technique : {winner} — {BLOCS_LABELS.get(winner, winner)} "
-                f"({win_p:.0%})",
+                f"Si on force le calcul : {BLOCS_LABELS.get(winner, winner)} "
+                f"en tête ({win_score:.1f} %)",
                 className="ea-metric-sub",
                 style={"fontSize": "1.05rem"},
             ),
@@ -1657,23 +1900,22 @@ def predict_fig(baseline, horizon, metrics, scenario, slider_vals, slider_ids):
     else:
         winner_box = html.Div(className="pred-winner", children=[
             html.Div(
-                f"Bloc prédit à {horizon} an{'s' if horizon > 1 else ''}"
-                + (f" (cible {annee_cible})" if annee_cible else ""),
+                f"Bloc prédit en {annee_h}",
                 className="ea-metric-label",
             ),
             html.Div(
-                f"{winner} — {BLOCS_LABELS.get(winner, winner)} ({win_p:.0%})",
+                f"{winner} — {BLOCS_LABELS.get(winner, winner)} ({scores.get(winner, 0):.1f} %)",
                 className="ea-metric-value",
                 style={"fontSize": "1.55rem"},
             ),
             html.P(note, className="ea-metric-sub mb-0 mt-2"),
             html.P(
-                "Prédiction indicative — limites du modèle assumées "
-                "(extrapolation des tendances + incertitude croissante).",
+                "Score = tendance France de l’année + écart prédit "
+                "(socio extrapolé sur l’horizon). Le modèle ne prédit pas la vague nationale.",
                 className="ea-metric-sub mb-0 mt-1",
             ),
         ])
-    return fig, fig_h, winner_box
+    return fig, fig_e, fig_h, winner_box
 
 
 @app.callback(
@@ -1689,7 +1931,7 @@ def predict_scenarios_compare(baseline, horizon):
     if not baseline:
         return empty_fig("Choisissez un périmètre")
 
-    series = [("Baseline France", {})]
+    series = [("Situation actuelle", {})]
     for key, sc in SCENARIOS.items():
         series.append((sc["label"], _apply_deltas(baseline, sc["deltas"])))
 
@@ -1697,44 +1939,56 @@ def predict_scenarios_compare(baseline, horizon):
     for name, overrides in series:
         payload = _build_payload(baseline, overrides)
         payload["horizon_ans"] = horizon
+        payload["scenario_national"] = "tendance"
+        payload["niveaux_nationaux"] = None
+        payload["annee_cible"] = (baseline or {}).get("annee_cible")
         code, body = api_post("/predict", payload)
         if code >= 400:
             return empty_fig(f"Erreur API {code}")
-        proba = body.get("probabilites") or {}
-        if proba and max(proba.values()) > 1.5:
-            proba = {k: v / 100.0 for k, v in proba.items()}
-        results.append((name, proba))
+        scores = body.get("scores") or {}
+        if not scores:
+            proba = body.get("probabilites") or {}
+            scores = {k: (v * 100.0 if v <= 1.5 else v) for k, v in proba.items()}
+        results.append((name, scores))
 
-    blocs_order = [b for b in BLOCS if any(b in p for _, p in results)]
+    blocs_order = [b for b in BLOCS if any(b in s for _, s in results)]
     if not blocs_order:
-        blocs_order = sorted({b for _, p in results for b in p})
+        blocs_order = sorted({b for _, s in results for b in s})
 
     palette = {
-        "Baseline France": "#5A6B7D",
+        "Situation actuelle": "#5A6B7D",
         SCENARIOS["crise"]["label"]: "#C8102E",
         SCENARIOS["reprise"]["label"]: "#2A5F9E",
         SCENARIOS["tension"]["label"]: "#C4922A",
     }
     fig = go.Figure()
-    for name, proba in results:
+    for name, scores in results:
         fig.add_trace(go.Bar(
             name=name,
-            x=blocs_order,
-            y=[proba.get(b, 0) for b in blocs_order],
+            x=ticks_blocs(blocs_order),
+            y=[scores.get(b, 0) for b in blocs_order],
             marker_color=palette.get(name, MUTED),
-            hovertemplate="%{x} · " + name + " : %{y:.1%}<extra></extra>",
+            hovertemplate="%{x} · " + name + " : %{y:.1f} %<extra></extra>",
         ))
+    ymax = max(
+        (float(v) for _, s in results for v in s.values()),
+        default=1,
+    )
+    annee_sc = _horizon_year(baseline, horizon)
     base_layout(
         fig,
-        f"Scénarios vs baseline — horizon {horizon} an{'s' if horizon > 1 else ''}",
-        height=380,
+        f"Crise, reprise ou tension — {annee_sc}",
+        subtitle="Gris = situation actuelle · les 3 autres = chocs socio-économiques",
+        height=420,
+        bottom_legend=False,
     )
     fig.update_layout(
         barmode="group",
-        yaxis=dict(range=[0, 1], tickformat=".0%", title=""),
-        xaxis_title="",
-        legend=legend_below(4),
-        margin=dict(l=48, r=24, b=80, t=56),
+        yaxis=dict(range=[0, ymax * 1.18], title="Score (%)", rangemode="tozero"),
+        xaxis=dict(title="", tickfont=dict(size=12)),
+        legend=legend_in(),
+        margin=dict(l=56, r=24, b=48, t=112),
+        showlegend=True,
     )
     return fig
 

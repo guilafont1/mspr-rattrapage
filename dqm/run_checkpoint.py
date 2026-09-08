@@ -62,6 +62,42 @@ def run_suite() -> dict:
         f"completude={pau_c:.1%} (historique Filosofi attendu pour 2017/2022)",
     ))
 
+    ok = all(c in gold.columns for c in (
+        "ecart_EXG", "pct_EXG_national", "ecart_EXG_prec", "inscrits",
+    ))
+    results.append(expect(
+        "expect_gold_decomposition_nationale",
+        ok,
+        "colonnes pct_*_national / ecart_* presentes",
+    ))
+
+    if "ecart_EXG" in gold.columns and "inscrits" in gold.columns:
+        ok_wm = True
+        details = []
+        for an, g in gold.groupby("annee"):
+            w = g["inscrits"].astype(float)
+            sw = float(w.sum()) or 1.0
+            for b in ("EXG", "GAU", "CEN", "DRO", "EXD"):
+                wm = float((g[f"ecart_{b}"] * w).sum() / sw)
+                if abs(wm) > 0.15:
+                    ok_wm = False
+                    details.append(f"{an}/{b}={wm:.3f}")
+        results.append(expect(
+            "expect_gold_ecart_pondere_proche_zero",
+            ok_wm,
+            "ok" if ok_wm else f"hors tol 0,15 : {details[:6]}",
+        ))
+
+    if all(f"pct_{b}_national" in gold.columns for b in ("EXG", "GAU", "CEN", "DRO", "EXD")):
+        s = gold[["pct_EXG_national", "pct_GAU_national", "pct_CEN_national",
+                  "pct_DRO_national", "pct_EXD_national"]].sum(axis=1)
+        ok_nat = bool(s.between(95, 105).all())
+        results.append(expect(
+            "expect_gold_national_somme_100",
+            ok_nat,
+            f"min={float(s.min()):.2f} max={float(s.max()):.2f}",
+        ))
+
     success = all(r["success"] for r in results)
     report = {
         "suite": "electio_silver_gold",

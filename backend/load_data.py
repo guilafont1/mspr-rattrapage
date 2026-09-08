@@ -31,7 +31,7 @@ DIM_BLOC = pd.DataFrame({
     "axe": [-2, -1, 0, 1, 2],
 })
 
-# Colonnes GOLD attendues (apres enrichissement medaillon)
+# Colonnes GOLD attendues (apres enrichissement medaillon + regression multi-sorties)
 GOLD_REQUIRED_COLS = [
     "annee", "code_dept",
     "taux_chomage_n1", "delta_chomage_1a", "delta_chomage_5a",
@@ -39,6 +39,24 @@ GOLD_REQUIRED_COLS = [
     "taux_pauvrete_n1", "creations_entreprises_n1",
     "bloc_gagnant", "pct_gagnant", "marge_gagnante",
     "bloc_gagnant_precedent", "pct_gagnant_precedent", "marge_gagnante_precedente",
+    "pct_EXG", "pct_GAU", "pct_CEN", "pct_DRO", "pct_EXD",
+    "pct_EXG_prec", "pct_GAU_prec", "pct_CEN_prec", "pct_DRO_prec", "pct_EXD_prec",
+    "delta_recent_EXG", "delta_recent_GAU", "delta_recent_CEN",
+    "delta_recent_DRO", "delta_recent_EXD",
+    "volatility_EXG", "volatility_GAU", "volatility_CEN",
+    "volatility_DRO", "volatility_EXD",
+    "inscrits",
+    "pct_EXG_national", "pct_GAU_national", "pct_CEN_national",
+    "pct_DRO_national", "pct_EXD_national",
+    "ecart_EXG", "ecart_GAU", "ecart_CEN", "ecart_DRO", "ecart_EXD",
+    "ecart_EXG_prec", "ecart_GAU_prec", "ecart_CEN_prec",
+    "ecart_DRO_prec", "ecart_EXD_prec",
+    "delta_recent_ecart_EXG", "delta_recent_ecart_GAU",
+    "delta_recent_ecart_CEN", "delta_recent_ecart_DRO",
+    "delta_recent_ecart_EXD",
+    "volatility_ecart_EXG", "volatility_ecart_GAU",
+    "volatility_ecart_CEN", "volatility_ecart_DRO",
+    "volatility_ecart_EXD",
 ]
 
 GOLD_ALTER = {
@@ -48,6 +66,42 @@ GOLD_ALTER = {
     "marge_gagnante": "REAL",
     "pct_gagnant_precedent": "REAL",
     "marge_gagnante_precedente": "REAL",
+    "pct_EXG": "REAL", "pct_GAU": "REAL", "pct_CEN": "REAL",
+    "pct_DRO": "REAL", "pct_EXD": "REAL",
+    "pct_EXG_prec": "REAL", "pct_GAU_prec": "REAL", "pct_CEN_prec": "REAL",
+    "pct_DRO_prec": "REAL", "pct_EXD_prec": "REAL",
+    "delta_recent_EXG": "REAL", "delta_recent_GAU": "REAL",
+    "delta_recent_CEN": "REAL", "delta_recent_DRO": "REAL",
+    "delta_recent_EXD": "REAL",
+    "delta_long_EXG": "REAL", "delta_long_GAU": "REAL",
+    "delta_long_CEN": "REAL", "delta_long_DRO": "REAL",
+    "delta_long_EXD": "REAL",
+    "trend_EXG": "REAL", "trend_GAU": "REAL", "trend_CEN": "REAL",
+    "trend_DRO": "REAL", "trend_EXD": "REAL",
+    "volatility_EXG": "REAL", "volatility_GAU": "REAL",
+    "volatility_CEN": "REAL", "volatility_DRO": "REAL",
+    "volatility_EXD": "REAL",
+    "inscrits": "INTEGER",
+    "pct_EXG_national": "REAL", "pct_GAU_national": "REAL",
+    "pct_CEN_national": "REAL", "pct_DRO_national": "REAL",
+    "pct_EXD_national": "REAL",
+    "ecart_EXG": "REAL", "ecart_GAU": "REAL", "ecart_CEN": "REAL",
+    "ecart_DRO": "REAL", "ecart_EXD": "REAL",
+    "ecart_EXG_prec": "REAL", "ecart_GAU_prec": "REAL",
+    "ecart_CEN_prec": "REAL", "ecart_DRO_prec": "REAL",
+    "ecart_EXD_prec": "REAL",
+    "delta_recent_ecart_EXG": "REAL", "delta_recent_ecart_GAU": "REAL",
+    "delta_recent_ecart_CEN": "REAL", "delta_recent_ecart_DRO": "REAL",
+    "delta_recent_ecart_EXD": "REAL",
+    "delta_long_ecart_EXG": "REAL", "delta_long_ecart_GAU": "REAL",
+    "delta_long_ecart_CEN": "REAL", "delta_long_ecart_DRO": "REAL",
+    "delta_long_ecart_EXD": "REAL",
+    "trend_ecart_EXG": "REAL", "trend_ecart_GAU": "REAL",
+    "trend_ecart_CEN": "REAL", "trend_ecart_DRO": "REAL",
+    "trend_ecart_EXD": "REAL",
+    "volatility_ecart_EXG": "REAL", "volatility_ecart_GAU": "REAL",
+    "volatility_ecart_CEN": "REAL", "volatility_ecart_DRO": "REAL",
+    "volatility_ecart_EXD": "REAL",
 }
 
 
@@ -86,10 +140,10 @@ def schema_outdated() -> bool:
     """True si GOLD absente, vide, ou sans les colonnes du contrat actuel."""
     eng = get_engine()
     try:
-        cols = _existing_columns(eng, "gold_dataset_analytique")
+        cols = {c.lower() for c in _existing_columns(eng, "gold_dataset_analytique")}
         if not cols:
             return True
-        missing = [c for c in GOLD_REQUIRED_COLS if c not in cols]
+        missing = [c for c in GOLD_REQUIRED_COLS if c.lower() not in cols]
         if missing:
             print(f"[schema] colonnes GOLD manquantes : {missing}")
             return True
@@ -97,18 +151,40 @@ def schema_outdated() -> bool:
             n = con.execute(text("SELECT COUNT(*) FROM gold_dataset_analytique")).scalar()
             if (n or 0) == 0:
                 return True
-            # Jeu charge avant enrichissement : nouvelles colonnes toutes NULL
+            # Jeu charge avant enrichissement multi-sorties : nouvelles colonnes NULL
             n_new = con.execute(text(
                 "SELECT COUNT(*) FROM gold_dataset_analytique "
-                "WHERE delta_chomage_1a IS NOT NULL OR pct_gagnant_precedent IS NOT NULL"
+                "WHERE ecart_EXG IS NOT NULL OR pct_EXG_national IS NOT NULL"
             )).scalar()
             if (n_new or 0) == 0:
-                print("[schema] GOLD presente mais features enrichies vides -> reload")
+                print("[schema] GOLD presente mais decomposition nationale/ecart vide -> reload")
                 return True
         return False
     except Exception as e:
         print(f"[schema] outdated check KO : {e}")
         return True
+
+
+GOLD_CANON = {}
+for _c in list(GOLD_REQUIRED_COLS) + list(GOLD_ALTER.keys()):
+    GOLD_CANON[_c.lower()] = _c
+GOLD_CANON.update({
+    "annee": "annee",
+    "code_dept": "code_dept",
+    "libelle": "libelle",
+})
+
+
+def canonicalize_gold_df(df: pd.DataFrame) -> pd.DataFrame:
+    """Aligne les noms Postgres (souvent minuscules) sur le contrat GOLD."""
+    if df is None or df.empty:
+        return df
+    rename = {}
+    for c in df.columns:
+        canon = GOLD_CANON.get(str(c).lower())
+        if canon and canon != c:
+            rename[c] = canon
+    return df.rename(columns=rename) if rename else df
 
 
 def _load_kpi(con, name: str, path: str):
@@ -150,8 +226,17 @@ def load():
             "fait_resultat_election", con, if_exists="append", index=False)
         # N'inserer que les colonnes presentes dans le CSV ET dans Postgres
         pg_cols = _existing_columns(eng, "gold_dataset_analytique")
-        use = [c for c in gold.columns if c in pg_cols]
-        gold[use].to_sql("gold_dataset_analytique", con, if_exists="append", index=False)
+        pg_by_lower = {c.lower(): c for c in pg_cols}
+        gold_c = canonicalize_gold_df(gold)
+        to_pg = {
+            c: pg_by_lower[c.lower()]
+            for c in gold_c.columns
+            if c.lower() in pg_by_lower
+        }
+        if to_pg:
+            gold_c.rename(columns=to_pg)[list(to_pg.values())].to_sql(
+                "gold_dataset_analytique", con, if_exists="append", index=False
+            )
         _load_kpi(con, "kpi_evolution_blocs", f"{GOLD}/kpi_evolution_blocs.csv")
         _load_kpi(con, "kpi_completude_features", f"{GOLD}/kpi_completude_features.csv")
         _load_kpi(con, "kpi_chomage_vs_bloc", f"{GOLD}/kpi_chomage_vs_bloc.csv")

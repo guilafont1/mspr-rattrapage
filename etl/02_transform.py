@@ -199,7 +199,7 @@ for _, e in elec.iterrows():
     pa_p = safe(pauv_idx, (d, p))
     en_p = safe(ent_idx, (d, p))
 
-    rows.append({
+    row = {
         "annee": an,
         "code_dept": d,
         "taux_chomage_n1": round(ch_p, 2) if ch_p is not None else None,
@@ -213,20 +213,170 @@ for _, e in elec.iterrows():
         "bloc_gagnant": e["bloc_gagnant"],
         "pct_gagnant": e["pct_gagnant"],
         "marge_gagnante": e["marge_gagnante"],
-    })
+        "inscrits": int(e["inscrits"]) if pd.notna(e.get("inscrits")) else None,
+    }
+    # Cibles du scrutin courant (regression multi-sorties)
+    for b in BLOCS:
+        row[f"pct_{b}"] = round(float(e[f"pct_{b}"]), 2)
+    rows.append(row)
 
 gold = pd.DataFrame(rows).sort_values(["code_dept", "annee"]).reset_index(drop=True)
-# Lags politiques (scrutin precedent uniquement)
+
+# Lags politiques (scrutin precedent uniquement) — anti-leakage
 g = gold.groupby("code_dept", group_keys=False)
 gold["bloc_gagnant_precedent"] = g["bloc_gagnant"].shift(1)
 gold["pct_gagnant_precedent"] = g["pct_gagnant"].shift(1)
 gold["marge_gagnante_precedente"] = g["marge_gagnante"].shift(1)
 
+def _lag_from_priors(values: list, years: list, ndigits: int = 2) -> tuple:
+    """Derivees anti-leakage : uniquement les observations d'indice < i."""
+    n = len(values)
+    prec, d_rec, d_long, trend, vol = [], [], [], [], []
+    for i in range(n):
+        prior_s = values[:i]
+        prior_y = years[:i]
+        if not prior_s:
+            prec.append(None)
+            d_rec.append(None)
+            d_long.append(None)
+            trend.append(None)
+            vol.append(None)
+            continue
+        p_last = prior_s[-1]
+        prec.append(round(p_last, ndigits))
+        d_rec.append(
+            round(p_last - prior_s[-2], ndigits) if len(prior_s) >= 2 else None
+        )
+        p_first = prior_s[0]
+        y_first, y_last = prior_y[0], prior_y[-1]
+        dl = p_last - p_first
+        d_long.append(round(dl, ndigits))
+        span = y_last - y_first
+        trend.append(round(dl / span, 4) if span > 0 else None)
+        if len(prior_s) >= 2:
+            vol.append(round(float(pd.Series(prior_s).std(ddof=1)), 4))
+        else:
+            vol.append(None)
+    return prec, d_rec, d_long, trend, vol
+
+
+# Features electorales par bloc : uniquement scrutins strictement anterieurs
+# (boucle par departement pour garantir qu'aucune valeur courante n'entre).
+elec_feat_cols: list[str] = []
+ecart_feat_cols: list[str] = []
+_parts = []
+for _, sub in gold.groupby("code_dept", sort=False):
+    sub = sub.sort_values("annee").copy()
+    years = sub["annee"].astype(int).tolist()
+    for b in BLOCS:
+        prec, d_rec, d_long, trend, vol = _lag_from_priors(
+            sub[f"pct_{b}"].astype(float).tolist(), years, ndigits=2,
+        )
+        sub[f"pct_{b}_prec"] = prec
+        sub[f"delta_recent_{b}"] = d_rec
+        sub[f"delta_long_{b}"] = d_long
+        sub[f"trend_{b}"] = trend
+        sub[f"volatility_{b}"] = vol
+    _parts.append(sub)
+
+gold = pd.concat(_parts, ignore_index=True).sort_values(["code_dept", "annee"]).reset_index(drop=True)
+for b in BLOCS:
+    elec_feat_cols.extend([
+        f"pct_{b}_prec", f"delta_recent_{b}", f"delta_long_{b}",
+        f"trend_{b}", f"volatility_{b}",
+    ])
+
+# Niveau national pondere par les inscrits + ecart departemental
+# (somme(pct_B * inscrits) / somme(inscrits) ; voix brutes absentes en GOLD).
+if gold["inscrits"].isna().any():
+    raise ValueError("GOLD : inscrits manquants, ponderation nationale impossible")
+for an, idx in gold.groupby("annee").groups.items():
+    g = gold.loc[idx]
+    w = g["inscrits"].astype(float)
+    sw = float(w.sum())
+    if sw <= 0:
+        raise ValueError(f"GOLD : somme des inscrits nulle pour {an}")
+    for b in BLOCS:
+        nat = float((g[f"pct_{b}"] * w).sum() / sw)
+        gold.loc[idx, f"pct_{b}_national"] = round(nat, 4)
+        gold.loc[idx, f"ecart_{b}"] = (g[f"pct_{b}"] - nat).round(4)
+
+# Derivees de l'ecart (meme logique anti-leakage, scrutins < N)
+_parts = []
+for _, sub in gold.groupby("code_dept", sort=False):
+    sub = sub.sort_values("annee").copy()
+    years = sub["annee"].astype(int).tolist()
+    for b in BLOCS:
+        prec, d_rec, d_long, trend, vol = _lag_from_priors(
+            sub[f"ecart_{b}"].astype(float).tolist(), years, ndigits=4,
+        )
+        sub[f"ecart_{b}_prec"] = prec
+        sub[f"delta_recent_ecart_{b}"] = d_rec
+        sub[f"delta_long_ecart_{b}"] = d_long
+        sub[f"trend_ecart_{b}"] = trend
+        sub[f"volatility_ecart_{b}"] = vol
+    _parts.append(sub)
+
+gold = pd.concat(_parts, ignore_index=True).sort_values(["code_dept", "annee"]).reset_index(drop=True)
+for b in BLOCS:
+    ecart_feat_cols.extend([
+        f"ecart_{b}", f"pct_{b}_national",
+        f"ecart_{b}_prec", f"delta_recent_ecart_{b}", f"delta_long_ecart_{b}",
+        f"trend_ecart_{b}", f"volatility_ecart_{b}",
+    ])
+
 check("gold: chomage_n1 renseigne", gold["taux_chomage_n1"].notna(), gold)
 check("gold: unicite (dept, annee)", ~gold.duplicated(["code_dept", "annee"]), gold)
+check(
+    "gold: pct_* dans [0;100]",
+    gold[[f"pct_{b}" for b in BLOCS]].apply(lambda s: s.between(0, 100)).all(axis=1),
+    gold,
+)
+gold["somme_pct_cibles"] = gold[[f"pct_{b}" for b in BLOCS]].sum(axis=1).round(2)
+check("gold: somme pct_* ~ 100", gold["somme_pct_cibles"].between(95, 105), gold)
 
-# Retirer colonnes de cible du scrutin courant hors besoin ML
-# (pct_gagnant / marge restent utiles en BI ; le modele ne les utilise pas comme features)
+# Somme des niveaux nationaux (constante par scrutin) dans [95;105]
+nat_sum = gold[[f"pct_{b}_national" for b in BLOCS]].sum(axis=1).round(2)
+check("gold: somme pct_*_national ~ 100", nat_sum.between(95, 105), gold)
+
+# Moyenne ponderee des ecarts ~ 0 (construction : national = moyenne ponderee).
+# Tolerance 0,15 pt : arrondi des pct a 2 decimales + national a 4.
+_TOL_ECART_PONDERE = 0.15
+for b in BLOCS:
+    wm = []
+    ok_mask = pd.Series(True, index=gold.index)
+    for an, idx in gold.groupby("annee").groups.items():
+        g = gold.loc[idx]
+        w = g["inscrits"].astype(float)
+        val = float((g[f"ecart_{b}"] * w).sum() / w.sum())
+        wm.append(val)
+        ok_mask.loc[idx] = abs(val) <= _TOL_ECART_PONDERE
+    check(
+        f"gold: moyenne ponderee ecart_{b} ~ 0 (tol={_TOL_ECART_PONDERE})",
+        ok_mask, gold,
+    )
+
+# Controle anti-leakage : pct_{B}_prec = score du scrutin N-1
+elec_prev = elec[["code_dept", "annee"] + [f"pct_{b}" for b in BLOCS]].copy()
+elec_prev = elec_prev.rename(
+    columns={"annee": "annee_prec", **{f"pct_{b}": f"_ref_{b}" for b in BLOCS}}
+)
+_chk = gold[["code_dept", "annee"]].copy()
+_chk["annee_prec"] = gold.groupby("code_dept")["annee"].shift(1)
+_chk = _chk.merge(elec_prev, on=["code_dept", "annee_prec"], how="left")
+for b in BLOCS:
+    both = gold[f"pct_{b}_prec"].notna() & _chk[f"_ref_{b}"].notna()
+    match = (gold.loc[both, f"pct_{b}_prec"] - _chk.loc[both, f"_ref_{b}"]).abs() < 0.06
+    check(f"gold: pct_{b}_prec = scrutin N-1", match, gold.loc[both])
+
+# Controle anti-leakage : ecart_{B}_prec = ecart du scrutin N-1
+for b in BLOCS:
+    shifted = gold.groupby("code_dept")[f"ecart_{b}"].shift(1)
+    both = gold[f"ecart_{b}_prec"].notna() & shifted.notna()
+    match = (gold.loc[both, f"ecart_{b}_prec"] - shifted[both]).abs() < 0.0006
+    check(f"gold: ecart_{b}_prec = scrutin N-1", match, gold.loc[both])
+
+gold = gold.drop(columns=["somme_pct_cibles"])
 gold.to_csv(os.path.join(GOLD, "dataset_analytique.csv"), index=False)
 
 # --- KPI decisionnels (artefacts Gold) ---
@@ -244,6 +394,10 @@ feat_cols = [
     "emploi_pour_1000hab", "croissance_emploi_5a_pct", "croissance_pop_5a_pct",
     "taux_pauvrete_n1", "creations_entreprises_n1",
     "bloc_gagnant_precedent", "pct_gagnant_precedent", "marge_gagnante_precedente",
+    "inscrits",
+    *[f"pct_{b}" for b in BLOCS],
+    *elec_feat_cols,
+    *ecart_feat_cols,
 ]
 kpi_completude = pd.DataFrame({
     "feature": feat_cols,
@@ -279,7 +433,14 @@ write_manifest(
     "GOLD", GOLD, gold_tables,
     extra={
         "grain": "1 ligne = 1 (code_dept, annee election)",
-        "anti_leakage": "features socio-eco <= N-1 ; lags politiques = scrutin precedent",
+        "anti_leakage": (
+            "features socio-eco <= N-1 ; lags politiques = scrutin precedent ; "
+            "features electorales et derivees d'ecart = scrutins strictement anterieurs"
+        ),
+        "decomposition": (
+            "pct_B = pct_B_national (pondere inscrits) + ecart_B ; "
+            "moyenne ponderee des ecarts ~ 0 (tolerance 0,15 pt)"
+        ),
         "n_observations": len(gold),
         "n_departements": int(gold["code_dept"].nunique()),
         "elections": sorted(int(x) for x in gold["annee"].unique()),
@@ -360,7 +521,7 @@ dqm = [
     "voir docs/mspr/04_machine_learning/ANALYSE_ML_CLASSES.md",
     f"completude_emploi={gold['emploi_pour_1000hab'].notna().mean():.1%}",
     f"unicite_cle=(code_dept,annee) doublons={gold.duplicated(['code_dept','annee']).sum()}",
-    "anti_leakage=features calculees sur annees <= N-1 + lags scrutin precedent",
+    "anti_leakage=features socio-eco <= N-1 + lags electoraux et d'ecart strictement anterieurs",
     "",
     "=== Referentiels ===",
     "dim_departement (libelle+region) | dim_annee | dim_bloc",

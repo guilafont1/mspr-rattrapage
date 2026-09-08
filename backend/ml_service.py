@@ -1,123 +1,178 @@
 # -*- coding: utf-8 -*-
 """
-Service ML — aligne sur ml/train.py :
-  estimateurs partagés, modèle retenu lu depuis data/ml_report.json,
-  enveloppe d'entraînement et clamp des features what-if.
+Service ML — regression des ecarts departementaux, alignee sur ml/train.py.
+
+Le modele predit ecart_B ; le score reconstruit est
+niveau_national_B + ecart_B, clippe [0;100] puis renormalise a 100.
+Le niveau national est un scenario (tendance ou saisi par l'utilisateur).
 """
 from __future__ import annotations
 
 import json
 import os
+import warnings
+from datetime import date
 
 import numpy as np
 import pandas as pd
-from sklearn.compose import ColumnTransformer
-from sklearn.ensemble import GradientBoostingClassifier, RandomForestClassifier
+from sklearn.base import BaseEstimator, RegressorMixin
+from sklearn.ensemble import RandomForestRegressor
 from sklearn.impute import SimpleImputer
-from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import accuracy_score, confusion_matrix, f1_score
-from sklearn.model_selection import GroupKFold, cross_val_score
+from sklearn.linear_model import Ridge
+from sklearn.metrics import accuracy_score, confusion_matrix
+from sklearn.multioutput import MultiOutputRegressor
 from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import OneHotEncoder, StandardScaler
-from sklearn.tree import DecisionTreeClassifier
+from sklearn.preprocessing import StandardScaler
+
+import load_data
 
 ROOT = os.path.join(os.path.dirname(__file__), "..")
 ML_REPORT = os.path.join(ROOT, "data", "ml_report.json")
 
-NUM_ALL = [
+BLOCS = ["EXG", "GAU", "CEN", "DRO", "EXD"]
+TARGETS = [f"ecart_{b}" for b in BLOCS]
+NAT_COLS = [f"pct_{b}_national" for b in BLOCS]
+
+ECART_FEATURES = []
+for b in BLOCS:
+    ECART_FEATURES.extend([
+        f"ecart_{b}_prec", f"delta_recent_ecart_{b}", f"delta_long_ecart_{b}",
+        f"trend_ecart_{b}", f"volatility_ecart_{b}",
+    ])
+
+SOCIO_FEATURES = [
     "taux_chomage_n1", "delta_chomage_1a", "delta_chomage_5a",
     "emploi_pour_1000hab", "croissance_emploi_5a_pct", "croissance_pop_5a_pct",
-    # pauvreté : Gold/BI seulement (voir ml/train.py)
-    "creations_entreprises_n1",
-    "pct_gagnant_precedent", "marge_gagnante_precedente",
 ]
-CAT = ["bloc_gagnant_precedent"]
 
-# Exactement les 4 estimateurs supervisés de ml/train.py (hors baseline dummy).
-ESTIMATEURS = {
-    "regression_logistique": lambda: LogisticRegression(
-        max_iter=3000, class_weight="balanced", C=0.8,
-    ),
-    "arbre_decision": lambda: DecisionTreeClassifier(
-        max_depth=4, min_samples_leaf=8, class_weight="balanced", random_state=42,
-    ),
-    "random_forest": lambda: RandomForestClassifier(
-        n_estimators=400, max_depth=5, min_samples_leaf=5,
-        class_weight="balanced_subsample", random_state=42,
-    ),
-    "gradient_boosting": lambda: GradientBoostingClassifier(
-        n_estimators=200, max_depth=3, learning_rate=0.1, random_state=42,
-    ),
-}
+NUM_ALL = ECART_FEATURES + SOCIO_FEATURES
+SOMME_NATIONAL_MIN, SOMME_NATIONAL_MAX = 90.0, 110.0
 
 _MODEL = None
 _META = {}
 _IMPORTANCE = {}
 _CONFUSION = {}
 _ENVELOPE = {}
+_MEAN_SCORES = {b: 20.0 for b in BLOCS}
+_NAT_HISTORY = pd.DataFrame()
+
+
+class PersistenceBundle(BaseEstimator, RegressorMixin):
+    def __init__(self, prec_cols=None):
+        self.prec_cols = prec_cols
+
+    def _prec(self):
+        return list(self.prec_cols) if self.prec_cols is not None else [
+            f"ecart_{b}_prec" for b in BLOCS
+        ]
+
+    def fit(self, X, y=None):
+        if not isinstance(X, pd.DataFrame):
+            raise TypeError("PersistenceBundle attend un DataFrame")
+        self.feature_names_in_ = list(X.columns)
+        self.n_features_in_ = X.shape[1]
+        self.n_outputs_ = len(self._prec())
+        return self
+
+    def predict(self, X):
+        if not isinstance(X, pd.DataFrame):
+            X = pd.DataFrame(X, columns=self.feature_names_in_)
+        return np.nan_to_num(X[self._prec()].to_numpy(dtype=float), nan=0.0)
+
+
+class RidgeParBloc(BaseEstimator, RegressorMixin):
+    def __init__(self, alpha=10.0, feature_names=None):
+        self.alpha = alpha
+        self.feature_names = feature_names
+
+    def fit(self, X, y):
+        if not isinstance(X, pd.DataFrame):
+            cols = self.feature_names or NUM_ALL
+            X = pd.DataFrame(X, columns=cols[: X.shape[1]])
+        if not isinstance(y, pd.DataFrame):
+            y = pd.DataFrame(y, columns=TARGETS)
+        self.feature_names_in_ = list(X.columns)
+        self.models_ = {}
+        self.cols_per_bloc_ = {}
+        socio = [c for c in SOCIO_FEATURES if c in X.columns]
+        for b in BLOCS:
+            cols = [c for c in X.columns if (
+                c in socio
+                or c == f"ecart_{b}_prec"
+                or c.startswith(f"delta_recent_ecart_{b}")
+                or c.startswith(f"delta_long_ecart_{b}")
+                or c.startswith(f"trend_ecart_{b}")
+                or c.startswith(f"volatility_ecart_{b}")
+            )]
+            self.cols_per_bloc_[b] = cols
+            pipe = Pipeline([
+                ("imp", SimpleImputer(strategy="median")),
+                ("sc", StandardScaler()),
+                ("ridge", Ridge(alpha=self.alpha)),
+            ])
+            pipe.fit(X[cols], y[f"ecart_{b}"])
+            self.models_[b] = pipe
+        self.n_outputs_ = len(BLOCS)
+        return self
+
+    def predict(self, X):
+        if not isinstance(X, pd.DataFrame):
+            X = pd.DataFrame(X, columns=self.feature_names_in_)
+        preds = [self.models_[b].predict(X[self.cols_per_bloc_[b]]) for b in BLOCS]
+        return np.column_stack(preds)
 
 
 def _modele_retenu() -> str:
-    """Lit la clé modele_retenu de data/ml_report.json.
-
-    Fallback random_forest si fichier illisible ou nom inconnu.
-    """
     try:
         with open(ML_REPORT, encoding="utf-8") as f:
             name = json.load(f).get("modele_retenu")
         if name in ESTIMATEURS:
             return name
-        print(f"[ml_service] modele_retenu inconnu ({name!r}) -> fallback random_forest")
+        print(f"[ml_service] modele_retenu inconnu ({name!r}) -> ridge_ecart_multisorties")
     except Exception as e:
-        print(f"[ml_service] ml_report.json illisible ({e}) -> fallback random_forest")
-    return "random_forest"
+        print(f"[ml_service] ml_report.json illisible ({e}) -> ridge_ecart_multisorties")
+    return "ridge_ecart_multisorties"
 
 
-def _build(df):
-    num = [c for c in NUM_ALL if c in df.columns and df[c].notna().any()]
-    pre = ColumnTransformer([
-        ("num", Pipeline([
-            ("imp", SimpleImputer(strategy="median")),
-            ("sc", StandardScaler()),
-        ]), num),
-        ("cat", OneHotEncoder(handle_unknown="ignore"), CAT),
-    ])
-    name = _modele_retenu()
-    model = Pipeline([
-        ("prep", pre),
-        ("clf", ESTIMATEURS[name]()),
-    ])
-    return model, num, name
-
-
-def _feature_names(model, num):
-    names = list(num)
+def _ridge_alpha() -> float:
     try:
-        ohe = model.named_steps["prep"].named_transformers_["cat"]
-        names += list(ohe.get_feature_names_out([CAT[0]]))
+        with open(ML_REPORT, encoding="utf-8") as f:
+            hp = json.load(f).get("hyperparams_retenus") or {}
+        return float(hp.get("ridge_alpha", 10.0))
     except Exception:
-        pass
-    return names
+        return 10.0
 
 
-def _exclure_annees_creations_absentes(df: pd.DataFrame) -> pd.DataFrame:
-    """Exclut les scrutins où creations_entreprises_n1 est nulle sur toute l'année.
+ESTIMATEURS = {
+    "baseline_persistance_ecart": lambda: PersistenceBundle(),
+    "ridge_ecart_par_bloc": lambda: RidgeParBloc(alpha=_ridge_alpha()),
+    "ridge_ecart_multisorties": lambda: Pipeline([
+        ("imp", SimpleImputer(strategy="median")),
+        ("sc", StandardScaler()),
+        ("reg", Ridge(alpha=_ridge_alpha())),
+    ]),
+    "random_forest_ecart_multisorties": lambda: Pipeline([
+        ("imp", SimpleImputer(strategy="median")),
+        ("sc", StandardScaler()),
+        ("reg", MultiOutputRegressor(
+            RandomForestRegressor(
+                n_estimators=200, max_depth=6, min_samples_leaf=5, random_state=42,
+            )
+        )),
+    ]),
+}
 
-    Aligné sur ml/train.py (décision : drop des observations, pas de la variable).
-    """
-    if "creations_entreprises_n1" not in df.columns or "annee" not in df.columns:
-        return df
-    null_year = df.groupby("annee")["creations_entreprises_n1"].apply(
-        lambda s: bool(s.isna().all())
-    )
-    years_drop = [int(y) for y, full in null_year.items() if full]
-    if not years_drop:
-        return df
-    return df[~df["annee"].isin(years_drop)].reset_index(drop=True)
+
+def _renorm_clip(pred) -> np.ndarray:
+    p = np.clip(np.asarray(pred, dtype=float), 0.0, 100.0)
+    if p.ndim == 1:
+        p = p.reshape(1, -1)
+    s = p.sum(axis=1, keepdims=True)
+    s = np.where(s <= 0, 1.0, s)
+    return p / s * 100.0
 
 
 def _compute_envelope(df: pd.DataFrame, num: list) -> dict:
-    """min / max / p01 / p99 par feature numérique (enveloppe d'entraînement)."""
     out = {}
     for c in num:
         if c not in df.columns:
@@ -134,76 +189,147 @@ def _compute_envelope(df: pd.DataFrame, num: list) -> dict:
     return out
 
 
+def niveaux_nationaux_projetes(hist: pd.DataFrame, annee_cible: int) -> dict:
+    """Tendance lineaire simple (identique a ml/train.py)."""
+    if hist is None or hist.empty:
+        arr = np.full(len(BLOCS), 20.0)
+    else:
+        h = (
+            hist.loc[hist["annee"] < annee_cible, ["annee"] + [
+                c for c in NAT_COLS if c in hist.columns
+            ]]
+            .drop_duplicates("annee")
+            .sort_values("annee")
+        )
+        cols = [c for c in NAT_COLS if c in h.columns]
+        if h.empty or not cols:
+            arr = np.full(len(BLOCS), 20.0)
+        elif len(h) == 1:
+            arr = np.array([
+                float(h.iloc[-1][f"pct_{b}_national"]) if f"pct_{b}_national" in h.columns else 20.0
+                for b in BLOCS
+            ], dtype=float)
+        else:
+            first, last = h.iloc[0], h.iloc[-1]
+            span = int(last["annee"]) - int(first["annee"])
+            dt = annee_cible - int(last["annee"])
+            arr = np.array([
+                float(last[f"pct_{b}_national"])
+                + (((float(last[f"pct_{b}_national"]) - float(first[f"pct_{b}_national"])) / span) * dt
+                   if span else 0.0)
+                for b in BLOCS
+            ], dtype=float)
+    arr = _renorm_clip(arr)[0]
+    return {b: round(float(arr[i]), 3) for i, b in enumerate(BLOCS)}
+
+
+def valider_niveaux_nationaux(niveaux: dict) -> dict:
+    """Normalise un dict {bloc: %} ; leve ValueError si la somme est hors [90;110]."""
+    raw = {str(k).upper(): v for k, v in (niveaux or {}).items()}
+    vals = []
+    for b in BLOCS:
+        try:
+            v = float(raw[b])
+        except (KeyError, TypeError, ValueError) as e:
+            raise ValueError(f"niveau national manquant ou invalide pour {b}") from e
+        vals.append(v)
+    s = float(np.sum(vals))
+    if s < SOMME_NATIONAL_MIN or s > SOMME_NATIONAL_MAX:
+        raise ValueError(
+            f"somme des niveaux nationaux = {s:.1f} ; attendu dans "
+            f"[{SOMME_NATIONAL_MIN:.0f};{SOMME_NATIONAL_MAX:.0f}]"
+        )
+    arr = _renorm_clip(vals)[0]
+    return {b: round(float(arr[i]), 3) for i, b in enumerate(BLOCS)}
+
+
 def train_from_engine(engine):
-    """Entraine sur la table GOLD lue depuis Postgres."""
-    global _MODEL, _META, _IMPORTANCE, _CONFUSION, _ENVELOPE
-    df = pd.read_sql("SELECT * FROM gold_dataset_analytique", engine)
-    df = df.dropna(subset=["taux_chomage_n1", "bloc_gagnant_precedent"]).reset_index(drop=True)
-    df = _exclure_annees_creations_absentes(df)
-    if len(df) == 0:
-        raise RuntimeError("GOLD vide apres filtrage (chomage_n1 / bloc precedent)")
+    """Entraine le regresseur d'ecarts sur GOLD Postgres."""
+    global _MODEL, _META, _IMPORTANCE, _CONFUSION, _ENVELOPE, _MEAN_SCORES, _NAT_HISTORY
+    df = load_data.canonicalize_gold_df(
+        pd.read_sql("SELECT * FROM gold_dataset_analytique", engine)
+    )
+    if "ecart_EXG" not in df.columns:
+        raise RuntimeError(
+            "GOLD sans ecarts — relancer etl/02_transform.py puis reload"
+        )
+    _NAT_HISTORY = (
+        df[["annee"] + [c for c in NAT_COLS if c in df.columns]]
+        .drop_duplicates("annee")
+        .sort_values("annee")
+        .copy()
+    )
+    df_ml = df.dropna(subset=["ecart_EXG_prec"]).reset_index(drop=True)
+    if len(df_ml) == 0:
+        raise RuntimeError("GOLD vide apres filtrage ecart_*_prec")
 
-    model, num, name = _build(df)
-    X = df[num + CAT]
-    y = df["bloc_gagnant"]
-    groups = df["code_dept"]
-    holdout = int(df["annee"].max())
+    num = [c for c in NUM_ALL if c in df_ml.columns and df_ml[c].notna().any()]
+    name = _modele_retenu()
+    model = ESTIMATEURS[name]()
+    X = df_ml[num]
+    y = df_ml[[c for c in TARGETS if c in df_ml.columns]]
+    holdout = int(df_ml["annee"].max())
+    te = df_ml["annee"] == holdout
 
-    try:
-        acc = cross_val_score(
-            model, X, y, cv=GroupKFold(5), groups=groups, scoring="accuracy"
-        ).mean()
-    except Exception:
-        acc = None
-
-    labels = sorted(y.unique().tolist())
-    te = df["annee"] == holdout
-    if te.any() and (~te).any():
-        model.fit(X[~te], y[~te])
-        pred = model.predict(X[te])
-        cm = confusion_matrix(y[te], pred, labels=labels)
-        _CONFUSION = {
-            "labels": labels,
-            "matrix": cm.tolist(),
-            "accuracy_test_2022": round(float(accuracy_score(y[te], pred)), 3),
-            "f1_macro_test_2022": round(
-                float(f1_score(y[te], pred, average="macro", zero_division=0)), 3
-            ),
-            "holdout_year": holdout,
-        }
-    else:
-        _CONFUSION = {
-            "labels": labels, "matrix": [],
-            "accuracy_test_2022": None, "f1_macro_test_2022": None,
-            "holdout_year": holdout,
-        }
-
-    # Fit production : historique hors holdout (coherent avec train.py)
-    if te.any() and (~te).any():
-        model.fit(X[~te], y[~te])
-    else:
-        model.fit(X, y)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        if te.any() and (~te).any():
+            model.fit(X[~te], y[~te])
+            pred_ecart = np.asarray(model.predict(X[te]), dtype=float)
+            nat = df_ml.loc[te, NAT_COLS].to_numpy(dtype=float)
+            scores = _renorm_clip(nat + pred_ecart)
+            y_true_bloc = df_ml.loc[te, "bloc_gagnant"].to_numpy()
+            y_pred_bloc = np.array(BLOCS)[np.argmax(scores, axis=1)]
+            labels = sorted(set(y_true_bloc) | set(y_pred_bloc))
+            cm = confusion_matrix(y_true_bloc, y_pred_bloc, labels=labels)
+            acc = float(accuracy_score(y_true_bloc, y_pred_bloc))
+            _CONFUSION = {
+                "labels": labels,
+                "matrix": cm.tolist(),
+                "accuracy_test_2022": round(acc, 3),
+                "holdout_year": holdout,
+                "tache": "argmax_ecarts_oracle",
+            }
+            model.fit(X[~te], y[~te])
+        else:
+            model.fit(X, y)
+            _CONFUSION = {
+                "labels": BLOCS, "matrix": [],
+                "accuracy_test_2022": None, "holdout_year": holdout,
+            }
 
     _MODEL = model
-    _ENVELOPE = _compute_envelope(df, num)
-    feat_names = _feature_names(model, num)
-    clf = model.named_steps["clf"]
-    if hasattr(clf, "feature_importances_"):
-        imp = dict(zip(feat_names, [round(float(v), 4) for v in clf.feature_importances_]))
-        _IMPORTANCE = dict(sorted(imp.items(), key=lambda kv: -kv[1]))
-    else:
-        _IMPORTANCE = {}
+    _ENVELOPE = _compute_envelope(df_ml, num)
+    _MEAN_SCORES = {
+        b: round(float(pd.to_numeric(df[f"pct_{b}"], errors="coerce").mean()), 2)
+        for b in BLOCS if f"pct_{b}" in df.columns
+    }
 
+    _IMPORTANCE = {}
+    if os.path.isfile(ML_REPORT):
+        try:
+            with open(ML_REPORT, encoding="utf-8") as f:
+                rep = json.load(f)
+            _IMPORTANCE = rep.get("importance_variables") or {}
+        except Exception:
+            pass
+
+    annee_max = int(df["annee"].max()) if len(df) else 2022
     _META = {
+        "tache": "regression_ecarts_departementaux",
         "features_numeriques": num,
-        "n_observations": int(len(df)),
-        "n_departements": int(df["code_dept"].nunique()),
-        "accuracy_cv_groupee": round(float(acc), 3) if acc is not None else None,
+        "n_observations": int(len(df_ml)),
+        "n_departements": int(df_ml["code_dept"].nunique()),
         "accuracy_test_2022": _CONFUSION.get("accuracy_test_2022"),
-        "classes": labels,
+        "classes": BLOCS,
         "modele_retenu": name,
-        "protocole": "walk-forward / holdout temporel",
+        "protocole": "walk-forward / holdout temporel / ecarts + scenario national",
         "enveloppe_entrainement": _ENVELOPE,
+        "scores_moyens_entrainement": _MEAN_SCORES,
+        "niveaux_nationaux_tendance": niveaux_nationaux_projetes(
+            _NAT_HISTORY, annee_max + 5
+        ),
+        "annee_cible_tendance": annee_max + 5,
     }
     return _META
 
@@ -225,16 +351,15 @@ def confusion() -> dict:
 
 
 def envelope() -> dict:
-    """Enveloppe d'entraînement (min/max/p01/p99) des features numériques."""
     return _ENVELOPE
 
 
-def clamp_features(features: dict) -> tuple[dict, list]:
-    """Borne les features numériques dans l'enveloppe d'entraînement.
+def tendance_nationale(annee_cible: int | None = None) -> dict:
+    cible = int(annee_cible or _META.get("annee_cible_tendance") or 2027)
+    return niveaux_nationaux_projetes(_NAT_HISTORY, cible)
 
-    Retourne (features_bornées, liste_des_dépassements).
-    Chaque dépassement : {feature, valeur, min, max}.
-    """
+
+def clamp_features(features: dict) -> tuple[dict, list]:
     out = dict(features)
     overs: list = []
     for col, bounds in (_ENVELOPE or {}).items():
@@ -243,15 +368,9 @@ def clamp_features(features: dict) -> tuple[dict, list]:
         val = _as_float(out.get(col))
         if val is None:
             continue
-        lo = float(bounds["min"])
-        hi = float(bounds["max"])
+        lo, hi = float(bounds["min"]), float(bounds["max"])
         if val < lo or val > hi:
-            overs.append({
-                "feature": col,
-                "valeur": val,
-                "min": lo,
-                "max": hi,
-            })
+            overs.append({"feature": col, "valeur": val, "min": lo, "max": hi})
             out[col] = min(hi, max(lo, val))
     return out, overs
 
@@ -265,16 +384,19 @@ def comparison_from_report() -> dict:
     for name, metrics in (report.get("modeles_compares") or {}).items():
         rows.append({
             "modele": name,
-            "accuracy_walkforward": metrics.get("accuracy_walkforward"),
-            "f1_macro_walkforward": metrics.get("f1_macro_walkforward"),
-            "accuracy_cv_groupee": metrics.get("accuracy_cv_groupee"),
-            "f1_macro_cv": metrics.get("f1_macro_cv"),
-            "accuracy_test_2022": metrics.get("accuracy_test_2022"),
-            "f1_macro_test_2022": metrics.get("f1_macro_test_2022"),
+            "mae_ecart_walkforward_hors_holdout": metrics.get(
+                "mae_ecart_walkforward_hors_holdout"
+            ),
+            "accuracy_oracle_hors_holdout": metrics.get("accuracy_oracle_hors_holdout"),
+            "accuracy_oracle_holdout": metrics.get("accuracy_oracle_holdout"),
+            "accuracy_projete_holdout": metrics.get("accuracy_projete_holdout"),
+            "mae_score_oracle_holdout": metrics.get("mae_score_oracle_holdout"),
+            "mae_score_projete_holdout": metrics.get("mae_score_projete_holdout"),
             "retenu": name == report.get("modele_retenu"),
         })
     rows.sort(
-        key=lambda r: (r.get("f1_macro_walkforward") or r.get("f1_macro_cv") or 0),
+        key=lambda r: (r.get("mae_ecart_walkforward_hors_holdout") is not None,
+                       -(r.get("mae_ecart_walkforward_hors_holdout") or 0)),
         reverse=True,
     )
     return {
@@ -282,23 +404,30 @@ def comparison_from_report() -> dict:
         "n_observations": report.get("n_observations"),
         "protocole": report.get("protocole"),
         "metriques_retenues": report.get("metriques_retenues"),
+        "holdout": report.get("holdout"),
+        "classification_argmax_holdout": report.get("classification_argmax_holdout"),
+        "poids_socio_eco": report.get("poids_socio_eco"),
+        "note_r2": report.get("note_r2"),
+        "metrique_principale": report.get("metrique_principale"),
         "modeles": rows,
         "source": "data/ml_report.json",
     }
 
 
-def predict_proba(features: dict) -> dict:
-    if _MODEL is None:
-        raise RuntimeError("Modele non entraine")
-    clamped, _ = clamp_features(features)
-    row = {
-        **{c: clamped.get(c) for c in NUM_ALL},
-        "bloc_gagnant_precedent": clamped.get("bloc_gagnant_precedent"),
+def regression_metrics_from_report() -> dict:
+    if not os.path.isfile(ML_REPORT):
+        return {}
+    with open(ML_REPORT, encoding="utf-8") as f:
+        report = json.load(f)
+    return {
+        "holdout": report.get("holdout"),
+        "regression_holdout": report.get("holdout"),
+        "poids_socio_eco": report.get("poids_socio_eco"),
+        "modele_retenu": report.get("modele_retenu"),
+        "note_r2": report.get("note_r2"),
+        "metrique_principale": report.get("metrique_principale", "MAE"),
+        "choc_national_holdout": report.get("choc_national_holdout"),
     }
-    X = pd.DataFrame([row])
-    proba = _MODEL.predict_proba(X)[0]
-    classes = _MODEL.named_steps["clf"].classes_.tolist()
-    return {c: round(float(p), 3) for c, p in zip(classes, proba)}
 
 
 def _as_float(val):
@@ -313,65 +442,143 @@ def _as_float(val):
     return f
 
 
-def extrapolate_features(features: dict, horizon_ans: int) -> dict:
-    """Projette les indicateurs N−1 vers l'horizon H (1–3 ans).
+def _row_from_features(features: dict) -> pd.DataFrame:
+    row = {c: features.get(c) for c in NUM_ALL}
+    return pd.DataFrame([row])
 
-    Hypothèse pédagogique (sujet préfecture) : on prolonge les tendances
-    annuelles implicites (Δ chômage / 5, croissance emploi / 5, …).
-    Horizon 1 = features telles quelles.
-    """
-    h = max(1, min(3, int(horizon_ans)))
+
+def _predict_ecarts(features: dict) -> tuple[dict, list]:
+    if _MODEL is None:
+        raise RuntimeError("Modele non entraine")
+    clamped, overs = clamp_features(features)
+    X = _row_from_features(clamped)
+    for c in getattr(_MODEL, "feature_names_in_", NUM_ALL):
+        if c not in X.columns:
+            X[c] = clamped.get(c)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        raw = np.asarray(_MODEL.predict(X), dtype=float)
+    if raw.ndim == 1:
+        raw = raw.reshape(1, -1)
+    ecarts = {b: round(float(raw[0, i]), 3) for i, b in enumerate(BLOCS)}
+    return ecarts, overs
+
+
+def resolve_niveaux(
+    scenario: str | None,
+    niveaux: dict | None,
+    annee_cible: int | None = None,
+) -> tuple[dict, str]:
+    """Retourne (niveaux renormalises, regime)."""
+    sc = (scenario or "tendance").strip().lower()
+    if niveaux:
+        return valider_niveaux_nationaux(niveaux), "utilisateur"
+    if sc in ("utilisateur", "user", "saisi"):
+        raise ValueError("niveaux_nationaux requis pour le regime utilisateur")
+    return tendance_nationale(annee_cible), "tendance"
+
+
+def predict_scores(
+    features: dict,
+    scenario_national: str | None = "tendance",
+    niveaux_nationaux: dict | None = None,
+    annee_cible: int | None = None,
+) -> dict:
+    """Scores reconstruits + ecarts + niveaux + regime."""
+    ecarts, overs = _predict_ecarts(features)
+    nat, regime = resolve_niveaux(scenario_national, niveaux_nationaux, annee_cible)
+    raw_scores = [nat[b] + ecarts[b] for b in BLOCS]
+    scores_arr = _renorm_clip(raw_scores)[0]
+    scores = {b: round(float(scores_arr[i]), 2) for i, b in enumerate(BLOCS)}
+    winner = max(scores, key=scores.get)
+    return {
+        "scores": scores,
+        "ecarts": ecarts,
+        "niveaux_nationaux": nat,
+        "regime": regime,
+        "bloc_predit": winner,
+        "hors_enveloppe": overs,
+    }
+
+
+def predict_proba(features: dict) -> dict:
+    out = predict_scores(features)
+    return {b: round(v / 100.0, 3) for b, v in out["scores"].items()}
+
+
+def extrapolate_features(features: dict, n_annees: int) -> dict:
+    """Pousse les leviers socio de n_annees (rythme observé N−1)."""
+    n = max(0, int(n_annees))
     out = dict(features)
-    if h == 1:
+    if n == 0:
         return out
-
-    years = h - 1  # projection au-delà de N−1
     chom = _as_float(out.get("taux_chomage_n1"))
     d5 = _as_float(out.get("delta_chomage_5a"))
     if chom is not None and d5 is not None:
-        out["taux_chomage_n1"] = round(chom + (d5 / 5.0) * years, 3)
-
+        out["taux_chomage_n1"] = round(chom + (d5 / 5.0) * n, 3)
     emp = _as_float(out.get("emploi_pour_1000hab"))
     g_emp = _as_float(out.get("croissance_emploi_5a_pct"))
     if emp is not None and g_emp is not None:
         annual = (1.0 + g_emp / 100.0) ** (1.0 / 5.0)
-        out["emploi_pour_1000hab"] = round(emp * (annual ** years), 2)
-
-    pop = _as_float(out.get("croissance_pop_5a_pct"))
-    if pop is not None:
-        # la feature reste un rythme ; on la laisse, l'effet passe via emploi
-        pass
-
+        out["emploi_pour_1000hab"] = round(emp * (annual ** n), 2)
     return out
 
 
-def apply_horizon_uncertainty(proba: dict, horizon_ans: int) -> dict:
-    """Élargit l'incertitude avec l'horizon (mélange vers uniforme).
+def annee_observation(annee_cible: int | None = None) -> int:
+    """Dernier scrutin GOLD (les features socio sont à cette date)."""
+    if _NAT_HISTORY is not None and not _NAT_HISTORY.empty:
+        return int(_NAT_HISTORY["annee"].max())
+    if annee_cible:
+        return int(annee_cible) - 5
+    return 2022
 
-    α = 0 / 0.12 / 0.25 pour H=1 / 2 / 3 — plus l'horizon est lointain,
-    moins la prédiction est affirmée (exigence CDC 1–3 ans).
+
+def annee_courante() -> int:
+    return int(date.today().year)
+
+
+def predict_proba_horizons(
+    features: dict,
+    scenario_national: str | None = "tendance",
+    niveaux_nationaux: dict | None = None,
+    annee_cible: int | None = None,
+) -> tuple[dict, dict, dict, dict, dict, dict, str]:
+    """Scores = tendance(now+h) + écart(socio interpolé depuis le dernier scrutin).
+
+    1 / 2 / 3 ans partent d'aujourd'hui (2026 → 2027, 2028, 2029),
+    pas du dernier scrutin (ce qui rejouait 2023–2025).
     """
-    h = max(1, min(3, int(horizon_ans)))
-    alpha = {1: 0.0, 2: 0.12, 3: 0.25}[h]
-    if alpha <= 0 or not proba:
-        return {k: round(float(v), 3) for k, v in proba.items()}
-    n = len(proba)
-    uni = 1.0 / n
-    mixed = {k: (1.0 - alpha) * float(v) + alpha * uni for k, v in proba.items()}
-    s = sum(mixed.values()) or 1.0
-    return {k: round(v / s, 3) for k, v in mixed.items()}
-
-
-def predict_proba_horizons(features: dict) -> tuple[dict, dict]:
-    """Retourne (probabilités H=1..3, dépassements d'enveloppe par horizon)."""
     if _MODEL is None:
         raise RuntimeError("Modele non entraine")
-    result = {}
-    overs_by_h = {}
+    obs = annee_observation(annee_cible)
+    now = annee_courante()
+    sc = (scenario_national or "tendance").strip().lower()
+    freeze_nat = bool(niveaux_nationaux) or sc in ("utilisateur", "user", "saisi")
+    nat_fixe, regime = resolve_niveaux(scenario_national, niveaux_nationaux, annee_cible)
+    scores_h, overs_h, blocs_h = {}, {}, {}
+    ecarts_h, nat_h, annees_h = {}, {}, {}
     for h in (1, 2, 3):
-        feats = extrapolate_features(features, h)
-        clamped, overs = clamp_features(feats)
-        raw = predict_proba(clamped)
-        result[str(h)] = apply_horizon_uncertainty(raw, h)
-        overs_by_h[str(h)] = overs
-    return result, overs_by_h
+        annee_h = now + h
+        n_extrap = max(0, annee_h - obs)
+        feats = extrapolate_features(features, n_extrap)
+        if freeze_nat:
+            nat = nat_fixe
+            reg = regime
+        else:
+            nat = tendance_nationale(annee_h)
+            reg = "tendance"
+        raw = predict_scores(
+            feats,
+            scenario_national="utilisateur",
+            niveaux_nationaux=nat,
+            annee_cible=annee_h,
+        )
+        key = str(h)
+        scores_h[key] = raw["scores"]
+        overs_h[key] = raw["hors_enveloppe"]
+        blocs_h[key] = raw["bloc_predit"]
+        ecarts_h[key] = raw["ecarts"]
+        nat_h[key] = nat
+        annees_h[key] = annee_h
+        regime = reg
+    return scores_h, overs_h, blocs_h, ecarts_h, nat_h, annees_h, regime
