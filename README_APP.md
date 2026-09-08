@@ -62,6 +62,38 @@ entraîne le modèle.
    ```
    Connexion via `backend/database.py` + `.env`. Aucun secret en dur dans le code.
 
+## Déploiement Render
+
+Deux services web (Docker) : **electio-api** (FastAPI) et **electio-app** (Dash).
+Blueprint : `render.yaml` (New + Blueprint, repo GitHub).
+
+### Secrets (Environment → Secret)
+
+À coller depuis `.env` / la console Aiven. **Ne jamais commiter** ces valeurs.
+
+| Clé | Où | Notes |
+|---|---|---|
+| `DB_HOST` | API | hostname Aiven (`*.aivencloud.com`) |
+| `DB_PORT` | API | port Aiven |
+| `DB_NAME` | API | ex. `defaultdb` |
+| `DB_USER` | API | ex. `avnadmin` |
+| `DB_PASSWORD` | API | mot de passe Aiven |
+| `DB_CA_PEM` | API | **contenu intégral** de `db/aiven-ca.pem` (y compris `BEGIN` / `END`) |
+| `DB_SSLMODE` | API | `require` (déjà posé par le blueprint) |
+| `API_URL` | Dash | URL publique de l’API, ex. `https://electio-api.onrender.com` |
+
+Le `.pem` est gitignoré : Render n’a pas le fichier. `DB_CA_PEM` est écrit
+dans un fichier temporaire au démarrage (`backend/database.py`), puis utilisé
+comme `sslrootcert` (mode `verify-ca`).
+
+Alternative dashboard : **Secret File** `aiven-ca.pem` → chemin
+`/etc/secrets/aiven-ca.pem`, et variable `DB_SSLROOTCERT` = ce chemin
+(sans `DB_CA_PEM`).
+
+1. Deployer l’API en premier, vérifier `https://<api>/health` et `/health/db`.
+2. Renseigner `API_URL` sur **electio-app**, redéployer le dashboard.
+3. La base Aiven doit déjà contenir GOLD (`python backend/init_remote.py` en local).
+
 ## Endpoints de l'API
 
 | Méthode | Route | Description |

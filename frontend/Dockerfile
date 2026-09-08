@@ -9,4 +9,5 @@ COPY frontend/ ./
 
 EXPOSE 8050
 # gunicorn sert l'objet `server` exposé par Dash (app.py)
-CMD ["gunicorn", "-b", "0.0.0.0:8050", "-w", "2", "app:server"]
+# Render injecte $PORT ; WEB_CONCURRENCY=1 recommandé sur le plan free
+CMD ["sh", "-c", "gunicorn -b 0.0.0.0:${PORT:-8050} -w ${WEB_CONCURRENCY:-2} app:server"]

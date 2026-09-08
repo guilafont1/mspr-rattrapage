@@ -1,0 +1,43 @@
+# Blueprint Render — Electio-Analytics (API FastAPI + Dash)
+# https://dashboard.render.com/blueprints
+#
+# Après le premier deploy, coller les secrets Aiven dans le dashboard
+# (Environment → Secret). Ne jamais commiter .env ni *.pem.
+#
+# Secret obligatoire en plus de DB_PASSWORD :
+#   DB_CA_PEM = contenu intégral de db/aiven-ca.pem
+#   (-----BEGIN CERTIFICATE----- … -----END CERTIFICATE-----)
+
+services:
+  - type: web
+    name: electio-api
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /health
+    envVars:
+      - key: DB_HOST
+        sync: false
+      - key: DB_PORT
+        sync: false
+      - key: DB_NAME
+        sync: false
+      - key: DB_USER
+        sync: false
+      - key: DB_PASSWORD
+        sync: false
+      - key: DB_CA_PEM
+        sync: false
+      - key: DB_SSLMODE
+        value: require
+
+  - type: web
+    name: electio-app
+    runtime: docker
+    dockerfilePath: ./frontend/Dockerfile
+    dockerContext: .
+    envVars:
+      - key: WEB_CONCURRENCY
+        value: "1"
+      - key: API_URL
+        sync: false

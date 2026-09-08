@@ -9,7 +9,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends gcc libpq-dev \
 COPY backend/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Code backend + schéma SQL. data/ est gitignoré : monté en local, déjà en base Aiven sur Render.
+# Code backend + schéma SQL. data/ est gitignoré : déjà en base Aiven sur Render.
 COPY backend/ ./backend/
 COPY db/ ./db/
 COPY etl/referentiels.py ./etl/referentiels.py

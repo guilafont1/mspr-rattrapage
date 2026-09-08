@@ -26,6 +26,8 @@ services:
       dockerfile: backend/Dockerfile
     container_name: electio_backend
     env_file: .env
+    volumes:
+      - ./data:/app/data
     # Pas de depends_on db : avec Aiven on lance seulement backend + frontend
     # docker compose up --build backend frontend
     dns:
