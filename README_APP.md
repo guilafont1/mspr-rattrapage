@@ -64,8 +64,11 @@ entraîne le modèle.
 
 ## Déploiement Render
 
-Deux services web (Docker) : **electio-api** (FastAPI) et **electio-app** (Dash).
-Blueprint : `render.yaml` (New + Blueprint, repo GitHub).
+Un service web (Docker racine) : **Dash** sur l’URL publique, **FastAPI** en interne
+(`start.sh`). Swagger : non exposé sur le port public ; le tableau de bord
+appelle l’API en `http://127.0.0.1:8000`.
+
+Blueprint optionnel (2 services séparés) : `render.yaml`.
 
 ### Secrets (Environment → Secret)
 

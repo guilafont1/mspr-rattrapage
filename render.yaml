@@ -1,12 +1,9 @@
-# Blueprint Render — Electio-Analytics (API FastAPI + Dash)
+# Blueprint optionnel (2 services). Le deploy actuel utilise le Dockerfile
+# racine : Dash + API dans le même service (start.sh).
 # https://dashboard.render.com/blueprints
-#
-# Après le premier deploy, coller les secrets Aiven dans le dashboard
-# (Environment → Secret). Ne jamais commiter .env ni *.pem.
 #
 # Secret obligatoire en plus de DB_PASSWORD :
 #   DB_CA_PEM = contenu intégral de db/aiven-ca.pem
-#   (-----BEGIN CERTIFICATE----- … -----END CERTIFICATE-----)
 
 services:
   - type: web

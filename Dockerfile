@@ -2,20 +2,20 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-# Dépendances système pour psycopg2
 RUN apt-get update && apt-get install -y --no-install-recommends gcc libpq-dev \
     && rm -rf /var/lib/apt/lists/*
 
-COPY backend/requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+COPY backend/requirements.txt /tmp/backend-req.txt
+COPY frontend/requirements.txt /tmp/frontend-req.txt
+RUN pip install --no-cache-dir -r /tmp/backend-req.txt -r /tmp/frontend-req.txt
 
-# Code backend + schéma SQL. data/ est gitignoré : déjà en base Aiven sur Render.
 COPY backend/ ./backend/
+COPY frontend/ ./frontend/
 COPY db/ ./db/
 COPY etl/referentiels.py ./etl/referentiels.py
-RUN mkdir -p /app/data
+COPY start.sh ./start.sh
+RUN mkdir -p /app/data && chmod +x /app/start.sh
 
-WORKDIR /app/backend
 EXPOSE 8000
-# Render injecte $PORT ; en local on reste sur 8000
-CMD ["sh", "-c", "uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}"]
+# Render : Dash sur $PORT, API FastAPI sur 127.0.0.1:8000
+CMD ["/app/start.sh"]
