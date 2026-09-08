@@ -4,8 +4,10 @@ API FastAPI - Electio-Analytics.
 Expose les donnees GOLD et les predictions du modele.
 """
 import os
+import sys
 from fastapi import FastAPI, Query, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.wsgi import WSGIMiddleware
 from pydantic import BaseModel
 from sqlalchemy import text
 import pandas as pd
@@ -13,6 +15,9 @@ import pandas as pd
 from database import get_engine
 import load_data
 import ml_service
+
+FRONT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "frontend"))
+SERVE_DASH = os.path.isfile(os.path.join(FRONT_DIR, "app.py"))
 
 
 def _records(df):
@@ -64,16 +69,17 @@ def admin_reload():
         raise HTTPException(500, f"Reload KO : {e}") from e
 
 
-@app.get("/")
-def root():
-    """Page d'accueil — Render tape / par défaut (sinon 404)."""
-    return {
-        "service": "Electio-Analytics API",
-        "docs": "/docs",
-        "health": "/health",
-        "health_db": "/health/db",
-        "modele_pret": ml_service.is_ready(),
-    }
+if not SERVE_DASH:
+    @app.get("/")
+    def root():
+        """JSON si l'image n'embarque pas Dash (backend Docker seul)."""
+        return {
+            "service": "Electio-Analytics API",
+            "docs": "/docs",
+            "health": "/health",
+            "health_db": "/health/db",
+            "modele_pret": ml_service.is_ready(),
+        }
 
 
 @app.get("/health")
@@ -558,3 +564,14 @@ def model_regression():
     if not data.get("holdout") and not data.get("regression_holdout"):
         raise HTTPException(404, "Metriques regression indisponibles")
     return data
+
+
+# Même process que Dash sur Render : callbacks → http://127.0.0.1:$PORT
+# (évite le second uvicorn :8000 qui n'écoute pas / crash).
+if SERVE_DASH:
+    os.environ["API_URL"] = f"http://127.0.0.1:{os.getenv('PORT', '8000')}"
+    if FRONT_DIR not in sys.path:
+        sys.path.insert(0, FRONT_DIR)
+    from app import server as dash_server  # noqa: E402
+
+    app.mount("/", WSGIMiddleware(dash_server))

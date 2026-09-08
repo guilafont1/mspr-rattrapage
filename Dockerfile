@@ -13,9 +13,9 @@ COPY backend/ ./backend/
 COPY frontend/ ./frontend/
 COPY db/ ./db/
 COPY etl/referentiels.py ./etl/referentiels.py
-COPY start.sh ./start.sh
-RUN mkdir -p /app/data && chmod +x /app/start.sh
+RUN mkdir -p /app/data
 
+WORKDIR /app/backend
 EXPOSE 8000
-# Render : Dash sur $PORT, API FastAPI sur 127.0.0.1:8000
-CMD ["/app/start.sh"]
+# Un seul process : FastAPI + Dash (monté sur /). Render injecte $PORT.
+CMD ["sh", "-c", "uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}"]

@@ -64,9 +64,9 @@ entraîne le modèle.
 
 ## Déploiement Render
 
-Un service web (Docker racine) : **Dash** sur l’URL publique, **FastAPI** en interne
-(`start.sh`). Swagger : non exposé sur le port public ; le tableau de bord
-appelle l’API en `http://127.0.0.1:8000`.
+Un service web (Docker racine) : **Dash + FastAPI** dans le même process
+(Dash monté sur `/`). Swagger : `/docs`. Ne pas poser `API_URL` sur Render
+(le backend la calcule tout seul sur `$PORT`).
 
 Blueprint optionnel (2 services séparés) : `render.yaml`.
 

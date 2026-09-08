@@ -1,5 +1,5 @@
 # Blueprint optionnel (2 services). Le deploy actuel utilise le Dockerfile
-# racine : Dash + API dans le même service (start.sh).
+# racine : Dash + API dans le même process (uvicorn).
 # https://dashboard.render.com/blueprints
 #
 # Secret obligatoire en plus de DB_PASSWORD :
