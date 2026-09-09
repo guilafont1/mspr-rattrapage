@@ -334,7 +334,6 @@ app.layout = html.Div(
             children=[
                 dbc.Tab(label="Vue d'ensemble", tab_id="tab-overview"),
                 dbc.Tab(label="Département", tab_id="tab-indics"),
-                dbc.Tab(label="Le modèle", tab_id="tab-model"),
                 dbc.Tab(label="Prédiction", tab_id="tab-predict"),
             ],
         ),
